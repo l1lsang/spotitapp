@@ -41,3 +41,14 @@ example
 # generated native folders
 /ios
 /android
+
+# Local verification and generated installers
+.verification.local/
+artifacts/*.log
+artifacts/*.apk
+artifacts/*.aab
+artifacts/*.ipa
+*-debug.log
+.env
+google-services.json
+GoogleService-Info.plist

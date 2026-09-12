@@ -1,0 +1,161 @@
+import Constants from 'expo-constants'
+import { CryptoDigestAlgorithm, digestStringAsync, randomUUID } from 'expo-crypto'
+import { Platform } from 'react-native'
+import {
+  createUserWithEmailAndPassword, deleteUser, EmailAuthProvider, GoogleAuthProvider,
+  OAuthProvider, reauthenticateWithCredential, sendPasswordResetEmail,
+  signInWithCredential, signInWithEmailAndPassword, signInWithPopup, signOut,
+  type AuthCredential, type User,
+} from 'firebase/auth'
+import { requireAuth } from '../lib/firebase'
+import { getSignupRequirementsError, type SignupRequirements } from '../lib/signupRequirements'
+import { deleteUserAccountData, upsertUserProfile } from './userService'
+import { disablePushNotifications } from './pushNotificationService'
+
+export class AuthCancelledError extends Error {
+  code = 'auth/cancelled'
+  constructor() { super('로그인을 취소했습니다.') }
+}
+
+export function authErrorMessage(error: unknown, fallback = '잠시 후 다시 시도해 주세요.'): string {
+  const code = (error as { code?: string })?.code || ''
+  const messages: Record<string, string> = {
+    'auth/invalid-email': '올바른 이메일 주소를 입력해 주세요.',
+    'auth/invalid-credential': '이메일 또는 비밀번호를 확인해 주세요.',
+    'auth/wrong-password': '이메일 또는 비밀번호를 확인해 주세요.',
+    'auth/user-not-found': '이메일 또는 비밀번호를 확인해 주세요.',
+    'auth/email-already-in-use': '이미 가입된 이메일입니다. 로그인해 주세요.',
+    'auth/weak-password': '비밀번호는 6자 이상으로 입력해 주세요.',
+    'auth/too-many-requests': '시도 횟수가 많습니다. 잠시 후 다시 시도해 주세요.',
+    'auth/network-request-failed': '인터넷 연결을 확인해 주세요.',
+    'auth/account-exists-with-different-credential': '같은 이메일로 가입한 계정이 있습니다. 기존 로그인 방법을 이용해 주세요.',
+    'auth/requires-recent-login': '계정 보호를 위해 다시 인증한 뒤 탈퇴해 주세요.',
+    'auth/operation-not-allowed': '이 로그인 방법은 아직 준비되지 않았습니다. 이메일 로그인을 이용해 주세요.',
+  }
+  return messages[code] || (error instanceof Error ? error.message : fallback)
+}
+
+function assertNativeProvider() {
+  if (Constants.appOwnership === 'expo') throw new Error('소셜 로그인은 설치된 스팟잇 앱에서 이용할 수 있습니다. 현재는 이메일로 로그인해 주세요.')
+}
+
+let googleConfigured = false
+async function googleCredential(): Promise<AuthCredential> {
+  assertNativeProvider()
+  const webClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID
+  if (!webClientId) throw new Error('구글 로그인이 아직 준비되지 않았습니다. 이메일로 로그인해 주세요.')
+  const { GoogleSignin, isSuccessResponse } = await import('@react-native-google-signin/google-signin')
+  if (!googleConfigured) {
+    GoogleSignin.configure({ webClientId, iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID })
+    googleConfigured = true
+  }
+  if (Platform.OS === 'android') await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true })
+  const result = await GoogleSignin.signIn()
+  if (!isSuccessResponse(result)) throw new AuthCancelledError()
+  if (!result.data.idToken) throw new Error('구글 인증 정보를 받지 못했습니다. 다시 시도해 주세요.')
+  return GoogleAuthProvider.credential(result.data.idToken)
+}
+
+async function kakaoCredential(): Promise<AuthCredential> {
+  assertNativeProvider()
+  if (!process.env.EXPO_PUBLIC_KAKAO_NATIVE_APP_KEY) throw new Error('카카오 로그인이 아직 준비되지 않았습니다. 이메일로 로그인해 주세요.')
+  const { login } = await import('@react-native-seoul/kakao-login')
+  const rawNonce = `${randomUUID()}${randomUUID()}`
+  const nonce = await digestStringAsync(CryptoDigestAlgorithm.SHA256, rawNonce)
+  const token = await login({ nonce })
+  if (!token.idToken) throw new Error('카카오 인증 정보를 받지 못했습니다. 다른 로그인 방법을 이용해 주세요.')
+  // Enable Kakao OIDC and configure the Firebase provider to accept the native
+  // application's token audience. Never embed a client secret in this app.
+  return new OAuthProvider(process.env.EXPO_PUBLIC_FIREBASE_KAKAO_PROVIDER_ID || 'oidc.kakao')
+    .credential({ idToken: token.idToken, rawNonce })
+}
+
+export async function signupWithEmail(
+  email: string,
+  password: string,
+  requirements: SignupRequirements,
+): Promise<User> {
+  const error = getSignupRequirementsError(requirements)
+  if (error) throw new Error(error)
+  const credential = await createUserWithEmailAndPassword(requireAuth(), email.trim(), password)
+
+  return credential.user
+}
+
+export async function loginWithEmail(email: string, password: string): Promise<User> {
+  const credential = await signInWithEmailAndPassword(requireAuth(), email.trim(), password)
+  await upsertUserProfile(credential.user)
+
+  return credential.user
+}
+
+export async function sendPasswordReset(email: string): Promise<void> {
+  await sendPasswordResetEmail(requireAuth(), email.trim())
+}
+
+export async function loginWithKakao(): Promise<User> {
+  const credential = Platform.OS === 'web'
+    ? await signInWithPopup(requireAuth(), new OAuthProvider(process.env.EXPO_PUBLIC_FIREBASE_KAKAO_PROVIDER_ID || 'oidc.kakao'))
+    : await signInWithCredential(requireAuth(), await kakaoCredential())
+  await upsertUserProfile(credential.user)
+
+  return credential.user
+}
+
+export async function loginWithGoogle(): Promise<User> {
+  const credential = Platform.OS === 'web'
+    ? await signInWithPopup(requireAuth(), new GoogleAuthProvider())
+    : await signInWithCredential(requireAuth(), await googleCredential())
+  await upsertUserProfile(credential.user)
+  return credential.user
+}
+
+export async function logout(): Promise<void> {
+  const uid = requireAuth().currentUser?.uid
+  // Remove this installation's token while Firestore permissions still allow it.
+  // If removal fails, keep the account signed in so logout can be retried safely.
+  if (uid) await disablePushNotifications(uid)
+  await signOut(requireAuth())
+  if (googleConfigured && Platform.OS !== 'web') {
+    try { const { GoogleSignin } = await import('@react-native-google-signin/google-signin'); await GoogleSignin.signOut() } catch { /* Firebase session is already cleared. */ }
+  }
+  if (Constants.appOwnership !== 'expo' && Platform.OS !== 'web' && process.env.EXPO_PUBLIC_KAKAO_NATIVE_APP_KEY) {
+    try { const kakao = await import('@react-native-seoul/kakao-login'); await kakao.logout() } catch { /* There may be no Kakao session. */ }
+  }
+}
+
+export async function reauthenticateAccount(user: User, password?: string): Promise<void> {
+  const providers = user.providerData.map(item => item.providerId)
+  if (providers.includes('password') && user.email) {
+    if (!password) throw new Error('현재 비밀번호를 입력해 주세요.')
+    await reauthenticateWithCredential(user, EmailAuthProvider.credential(user.email, password))
+  } else if (providers.includes('google.com')) {
+    if (Platform.OS === 'web') {
+      const { reauthenticateWithPopup } = await import('firebase/auth')
+      await reauthenticateWithPopup(user, new GoogleAuthProvider())
+    } else await reauthenticateWithCredential(user, await googleCredential())
+  } else if (providers.some(id => id.startsWith('oidc.'))) {
+    if (Platform.OS === 'web') {
+      const { reauthenticateWithPopup } = await import('firebase/auth')
+      await reauthenticateWithPopup(user, new OAuthProvider(process.env.EXPO_PUBLIC_FIREBASE_KAKAO_PROVIDER_ID || 'oidc.kakao'))
+    } else await reauthenticateWithCredential(user, await kakaoCredential())
+  } else {
+    const error = new Error('로그아웃 후 다시 로그인하고 탈퇴해 주세요.')
+    Object.assign(error, { code: 'auth/requires-recent-login' })
+    throw error
+  }
+}
+
+export async function deleteAccount(user: User): Promise<void> {
+  // Validate recent authentication before deleting any profile data.
+  const token = await user.getIdTokenResult(true)
+  const authenticatedAt = Date.parse(token.authTime)
+  if (!Number.isFinite(authenticatedAt) || Date.now() - authenticatedAt > 4 * 60_000) {
+    const error = new Error('계정 보호를 위해 다시 인증한 뒤 탈퇴해 주세요.')
+    Object.assign(error, { code: 'auth/requires-recent-login' })
+    throw error
+  }
+  await disablePushNotifications(user.uid)
+  await deleteUserAccountData(user.uid)
+  await deleteUser(user)
+}

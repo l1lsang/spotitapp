@@ -1,0 +1,341 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function authenticated() {
+      return signedIn() && (!exists(/databases/$(database)/documents/moderationUsers/$(request.auth.uid))
+        || get(/databases/$(database)/documents/moderationUsers/$(request.auth.uid)).data.suspended != true);
+    }
+    function active() {
+      return authenticated() && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('onboardingComplete', true) != false;
+    }
+    function accountOwner(uid) { return authenticated() && request.auth.uid == uid; }
+    function isOwner(uid) { return active() && request.auth.uid == uid; }
+    function validRegistration(data) {
+      let today = request.time + duration.value(9, 'h');
+      let birth = timestamp.date(data.birthYear, data.birthMonth, data.birthDay);
+      return data.keys().hasOnly(['birthYear', 'birthMonth', 'birthDay', 'termsAccepted', 'privacyAccepted', 'version', 'acceptedAt'])
+        && data.birthYear is int && data.birthMonth is int && data.birthDay is int
+        && data.birthYear >= 1900 && birth.year() == data.birthYear && birth.month() == data.birthMonth && birth.day() == data.birthDay
+        && (today.year() - data.birthYear > 14 || (today.year() - data.birthYear == 14
+          && (today.month() > data.birthMonth || (today.month() == data.birthMonth && today.day() >= data.birthDay))))
+        && data.termsAccepted == true && data.privacyAccepted == true
+        && data.version == '2026-09-09.2' && data.acceptedAt == request.time;
+    }
+    function registrationComplete(uid) {
+      return existsAfter(/databases/$(database)/documents/users/$(uid)/private/registration);
+    }
+    function locationConsented() {
+      let consent = get(/databases/$(database)/documents/users/$(request.auth.uid)/private/locationConsent).data;
+      return consent.accepted == true && consent.version == '2026-09-09.2';
+    }
+    function validOnboardingUpdate(uid) {
+      // Existing completed accounts keep their access. New and unfinished accounts must enroll.
+      return request.resource.data.get('registrationRequired', false) == resource.data.get('registrationRequired', false)
+        && (request.resource.data.onboardingComplete == false
+          || (resource.data.get('onboardingComplete', true) != false && !resource.data.get('registrationRequired', false))
+          || registrationComplete(uid));
+    }
+    function canReadPost(data) {
+      return active() && (data.uid == request.auth.uid || data.visibility == 'public'
+        || (data.visibility == 'followers' && exists(/databases/$(database)/documents/users/$(data.uid)/followers/$(request.auth.uid)))
+        || (data.visibility == 'group' && groupMember(data.groupId)));
+    }
+    function groupMember(groupId) {
+      return exists(/databases/$(database)/documents/groups/$(groupId)/members/$(request.auth.uid));
+    }
+    function post(postId) { return get(/databases/$(database)/documents/posts/$(postId)).data; }
+    function validComment(data) {
+      return data.content is string && data.content.size() > 0 && data.content.size() <= 2000
+        && data.get('mentions', {}) is map && data.get('mentions', {}).size() <= 5
+        && data.authorNickname == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.nickname
+        && data.createdAt == request.time;
+    }
+    function recipientCanReadPost(source, uid) {
+      return source.uid == uid || source.visibility == 'public'
+        || (source.visibility == 'followers' && exists(/databases/$(database)/documents/users/$(source.uid)/followers/$(uid)))
+        || (source.visibility == 'group' && exists(/databases/$(database)/documents/groups/$(source.groupId)/members/$(uid)));
+    }
+    function validMentionNotification(recipientUid, source) {
+      let data = request.resource.data;
+      let commentPath = /databases/$(database)/documents/posts/$(data.postId)/comments/$(data.commentId);
+      let isReply = data.get('replyId', '') != '';
+      let message = isReply ? getAfter(/databases/$(database)/documents/posts/$(data.postId)/comments/$(data.commentId)/replies/$(data.replyId)).data : getAfter(commentPath).data;
+      return message.uid == request.auth.uid && message.createdAt == request.time
+        && data.mentionUsername is string && data.mentionUsername.matches('^[a-z0-9._]{1,30}$')
+        && message.get('mentions', {}).get('@' + data.mentionUsername, '') == recipientUid
+        && get(/databases/$(database)/documents/usernames/$('@' + data.mentionUsername)).data.uid == recipientUid
+        && recipientCanReadPost(source, recipientUid)
+        && data.href == '/posts/' + data.postId + (isReply ? '#reply-' + data.replyId : '#comment-' + data.commentId);
+    }
+    function validSocialNotification(recipientUid) {
+      let data = request.resource.data;
+      let source = post(data.postId);
+      return canReadPost(source) && recipientUid != request.auth.uid && data.createdAt == request.time && data.readAt == null
+        && data.actorNickname == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.nickname
+        && ((data.type == 'like' && recipientUid == source.uid
+            && getAfter(/databases/$(database)/documents/posts/$(data.postId)/likes/$(request.auth.uid)).data.createdAt == request.time
+            && data.href == '/posts/' + data.postId)
+          || (data.type == 'comment' && recipientUid == source.uid
+            && getAfter(/databases/$(database)/documents/posts/$(data.postId)/comments/$(data.commentId)).data.uid == request.auth.uid
+            && getAfter(/databases/$(database)/documents/posts/$(data.postId)/comments/$(data.commentId)).data.createdAt == request.time
+            && data.href == '/posts/' + data.postId + '#comment-' + data.commentId)
+          || (data.type == 'reply'
+            && (recipientUid == source.uid || recipientUid == get(/databases/$(database)/documents/posts/$(data.postId)/comments/$(data.commentId)).data.uid)
+            && getAfter(/databases/$(database)/documents/posts/$(data.postId)/comments/$(data.commentId)/replies/$(data.replyId)).data.uid == request.auth.uid
+            && getAfter(/databases/$(database)/documents/posts/$(data.postId)/comments/$(data.commentId)/replies/$(data.replyId)).data.createdAt == request.time
+            && data.href == '/posts/' + data.postId + '#reply-' + data.replyId)
+          || (data.type == 'mention' && validMentionNotification(recipientUid, source)));
+    }
+    function validPostGroup(data, previousGroupId) {
+      let groupId = data.get('groupId', '');
+      return groupId is string && groupId.size() <= 128
+        && ((groupId == '' && data.visibility != 'group') || (groupId.matches('^[^/]+$')
+          && exists(/databases/$(database)/documents/groups/$(groupId))
+          && data.visibility == (get(/databases/$(database)/documents/groups/$(groupId)).data.get('visibility', 'public') == 'private' ? 'group' : 'public')
+          && (groupId == previousGroupId || exists(/databases/$(database)/documents/groups/$(groupId)/members/$(request.auth.uid)))));
+    }
+    function validGroupMember(groupId, uid) {
+      let data = request.resource.data;
+      let code = data.get('inviteCode', '');
+      return isOwner(uid) && data.keys().hasOnly(['uid', 'groupId', 'joinedAt', 'inviteCode'])
+        && data.uid == uid && data.groupId == groupId && data.joinedAt == request.time
+        && getAfter(/databases/$(database)/documents/users/$(uid)/groupMemberships/$(groupId)).data == data
+        && (exists(/databases/$(database)/documents/groups/$(groupId))
+          ? (((get(/databases/$(database)/documents/groups/$(groupId)).data.get('visibility', 'public') == 'public' && !('inviteCode' in data))
+              || (code is string && code.matches('^[A-HJ-NP-Z2-9]{12}$')
+                && get(/databases/$(database)/documents/groupInvites/$(code)).data.groupId == groupId))
+            && getAfter(/databases/$(database)/documents/groups/$(groupId)).data.memberCount == get(/databases/$(database)/documents/groups/$(groupId)).data.memberCount + 1)
+          : getAfter(/databases/$(database)/documents/groups/$(groupId)).data.ownerUid == uid);
+    }
+    function chatMember(chatId) {
+      return active() && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participantIds;
+    }
+    function validProfileIdentity(uid) {
+      let data = request.resource.data;
+      return (!('username' in data) && data.onboardingComplete == false)
+        || (data.username is string && data.username.matches('^[a-z0-9._]{1,30}$')
+          && getAfter(/databases/$(database)/documents/usernames/$('@' + data.username)).data.uid == uid);
+    }
+    function validProfileText() {
+      let data = request.resource.data;
+      return (!('bio' in data) || (data.bio is string && data.bio.size() <= 150))
+        && (data.onboardingComplete == false || (data.nickname is string && data.nickname.size() > 0 && data.nickname.size() <= 24));
+    }
+    function releasesOldUsername() {
+      return !('username' in resource.data) || request.resource.data.username == resource.data.username
+        || !existsAfter(/databases/$(database)/documents/usernames/$('@' + resource.data.username));
+    }
+    function networkChange(uid) {
+      return active() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['followerCount', 'followingCount', 'updatedAt'])
+        && (exists(/databases/$(database)/documents/users/$(uid)/followers/$(request.auth.uid))
+          || existsAfter(/databases/$(database)/documents/users/$(uid)/followers/$(request.auth.uid))
+          || exists(/databases/$(database)/documents/users/$(uid)/following/$(request.auth.uid))
+          || existsAfter(/databases/$(database)/documents/users/$(uid)/following/$(request.auth.uid)));
+    }
+    function canFollow(authorUid, followerUid) {
+      return active() && (request.auth.uid == authorUid
+        || (request.auth.uid == followerUid && get(/databases/$(database)/documents/users/$(authorUid)).data.get('isPrivate', false) == false));
+    }
+    match /usernames/{usernameKey} {
+      allow get: if true;
+      allow list: if false;
+      allow create, update: if request.resource.data.keys().hasOnly(['uid']) && accountOwner(request.resource.data.uid)
+        && usernameKey.matches('^@[a-z0-9._]{1,30}$')
+        && (!exists(/databases/$(database)/documents/usernames/$(usernameKey)) || resource.data.uid == request.auth.uid)
+        && usernameKey == '@' + getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.username;
+      allow delete: if accountOwner(resource.data.uid)
+        && (!existsAfter(/databases/$(database)/documents/users/$(request.auth.uid))
+          || usernameKey != '@' + getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.username);
+    }
+    match /users/{uid} {
+      allow read: if active() || accountOwner(uid);
+      allow create: if accountOwner(uid) && request.resource.data.uid == uid && validProfileIdentity(uid) && validProfileText()
+        && request.resource.data.onboardingComplete == false && request.resource.data.registrationRequired == true;
+      allow update: if (accountOwner(uid) && request.resource.data.uid == uid && validProfileIdentity(uid) && validProfileText()
+        && validOnboardingUpdate(uid) && releasesOldUsername()) || networkChange(uid);
+      allow delete: if accountOwner(uid) && (!('username' in resource.data)
+        || !existsAfter(/databases/$(database)/documents/usernames/$('@' + resource.data.username)));
+      match /private/registration {
+        allow read: if accountOwner(uid);
+        allow create: if accountOwner(uid) && validRegistration(request.resource.data);
+        allow update: if false;
+        allow delete: if accountOwner(uid) && !existsAfter(/databases/$(database)/documents/users/$(uid));
+      }
+      match /private/locationConsent {
+        allow read: if accountOwner(uid);
+        allow create, update: if accountOwner(uid)
+          && request.resource.data.keys().hasOnly(['accepted', 'version', 'updatedAt'])
+          && request.resource.data.accepted is bool && request.resource.data.version == '2026-09-09.2'
+          && request.resource.data.updatedAt == request.time;
+        allow delete: if accountOwner(uid) && !existsAfter(/databases/$(database)/documents/users/$(uid));
+      }
+      match /followers/{followerUid} {
+        allow read: if active();
+        allow create: if canFollow(uid, followerUid) && request.resource.data.uid == followerUid;
+        allow delete: if isOwner(uid) || isOwner(followerUid);
+      }
+      match /following/{targetUid} {
+        allow read: if active();
+        allow create: if canFollow(targetUid, uid) && request.resource.data.uid == targetUid;
+        allow delete: if isOwner(uid) || isOwner(targetUid);
+      }
+      match /followRequests/{senderUid} {
+        allow read: if isOwner(uid) || isOwner(senderUid);
+        allow create: if isOwner(senderUid) && request.resource.data.uid == senderUid;
+        allow delete: if isOwner(uid) || isOwner(senderUid);
+      }
+      match /sentFollowRequests/{targetUid} {
+        allow read: if isOwner(uid) || isOwner(targetUid);
+        allow create: if isOwner(uid) && request.resource.data.uid == targetUid;
+        allow delete: if isOwner(uid) || isOwner(targetUid);
+      }
+      match /notifications/{notificationId} {
+        allow read: if isOwner(uid) || isOwner(resource.data.actorUid);
+        allow create: if active() && request.resource.data.actorUid == request.auth.uid && request.resource.data.recipientUid == uid
+          && (!(request.resource.data.type in ['like', 'comment', 'reply', 'mention']) || validSocialNotification(uid));
+        allow update: if isOwner(uid) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readAt']);
+        allow delete: if isOwner(uid) || isOwner(resource.data.actorUid);
+      }
+      match /fcmTokens/{tokenId} { allow read, write: if isOwner(uid); }
+      match /expoPushTokens/{tokenId} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid)
+          && request.resource.data.token is string
+          && request.resource.data.token.size() <= 300
+          && request.resource.data.token.matches('^(ExponentPushToken|ExpoPushToken)\\[[A-Za-z0-9_-]+\\]$');
+      }
+      match /groupMemberships/{groupId} {
+        allow read: if isOwner(uid);
+        allow create: if isOwner(uid)
+          && getAfter(/databases/$(database)/documents/groups/$(groupId)/members/$(uid)).data == request.resource.data;
+        allow delete: if isOwner(uid) && !existsAfter(/databases/$(database)/documents/groups/$(groupId)/members/$(uid));
+      }
+    }
+    match /groups/{groupId} {
+      allow get: if active() && (resource.data.get('visibility', 'public') == 'public' || groupMember(groupId));
+      allow list: if active() && resource.data.visibility == 'public';
+      allow create: if active()
+        && request.resource.data.keys().hasOnly(['name', 'description', 'ownerUid', 'memberCount', 'createdAt', 'visibility'])
+        && request.resource.data.visibility in ['public', 'private']
+        && request.resource.data.name is string && request.resource.data.name.size() >= 2 && request.resource.data.name.size() <= 40
+        && request.resource.data.description is string && request.resource.data.description.size() <= 240
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.createdAt == request.time && request.resource.data.memberCount == 1
+        && existsAfter(/databases/$(database)/documents/groups/$(groupId)/members/$(request.auth.uid))
+        && existsAfter(/databases/$(database)/documents/groups/$(groupId)/private/invite);
+      allow update: if active() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberCount'])
+        && request.resource.data.memberCount is int && request.resource.data.memberCount >= 0
+        && ((!exists(/databases/$(database)/documents/groups/$(groupId)/members/$(request.auth.uid))
+            && existsAfter(/databases/$(database)/documents/groups/$(groupId)/members/$(request.auth.uid))
+            && request.resource.data.memberCount == resource.data.memberCount + 1)
+          || (exists(/databases/$(database)/documents/groups/$(groupId)/members/$(request.auth.uid))
+            && !existsAfter(/databases/$(database)/documents/groups/$(groupId)/members/$(request.auth.uid))
+            && request.resource.data.memberCount == resource.data.memberCount - 1));
+      match /members/{uid} {
+        // A member may check a specific recipient's membership when composing a mention.
+        allow get: if isOwner(uid) || (active() && groupMember(groupId));
+        allow list: if isOwner(uid);
+        allow create: if validGroupMember(groupId, uid);
+        allow delete: if isOwner(uid)
+          && !existsAfter(/databases/$(database)/documents/users/$(uid)/groupMemberships/$(groupId))
+          && getAfter(/databases/$(database)/documents/groups/$(groupId)).data.memberCount == get(/databases/$(database)/documents/groups/$(groupId)).data.memberCount - 1;
+      }
+      match /private/invite {
+        allow get: if active() && groupMember(groupId);
+        allow create: if active()
+          && existsAfter(/databases/$(database)/documents/groups/$(groupId)/members/$(request.auth.uid))
+          && request.resource.data.keys().hasOnly(['code'])
+          && request.resource.data.code is string && request.resource.data.code.matches('^[A-HJ-NP-Z2-9]{12}$')
+          && getAfter(/databases/$(database)/documents/groupInvites/$(request.resource.data.code)).data.groupId == groupId;
+      }
+    }
+    // Knowing a code grants access to its group ID, never to the invitation directory or group contents.
+    match /groupInvites/{code} {
+      allow get: if active();
+      allow create: if active() && code.matches('^[A-HJ-NP-Z2-9]{12}$')
+        && request.resource.data.keys().hasOnly(['groupId']) && request.resource.data.groupId is string
+        && existsAfter(/databases/$(database)/documents/groups/$(request.resource.data.groupId)/members/$(request.auth.uid))
+        && getAfter(/databases/$(database)/documents/groups/$(request.resource.data.groupId)/private/invite).data.code == code;
+    }
+    match /posts/{postId} {
+      allow get: if active() && (!exists(/databases/$(database)/documents/posts/$(postId)) || canReadPost(resource.data));
+      allow list: if canReadPost(resource.data);
+      allow create: if isOwner(request.resource.data.uid)
+        && locationConsented()
+        && validPostGroup(request.resource.data, '')
+        && !exists(/databases/$(database)/documents/moderationPosts/$(postId))
+        && request.resource.data.visibility in ['followers', 'private', 'public', 'group'];
+      allow update: if (isOwner(resource.data.uid) && request.resource.data.uid == resource.data.uid
+          && validPostGroup(request.resource.data, resource.data.get('groupId', ''))
+          && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['lat', 'lng', 'placeName', 'address', 'visibility', 'groupId']) || locationConsented())
+          && request.resource.data.visibility in ['followers', 'private', 'public', 'group'])
+        || (canReadPost(resource.data) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likeCount', 'commentCount', 'updatedAt']));
+      allow delete: if isOwner(resource.data.uid);
+      match /comments/{commentId} {
+        allow read: if canReadPost(post(postId)) || isOwner(resource.data.uid);
+        allow create: if isOwner(request.resource.data.uid) && canReadPost(post(postId)) && validComment(request.resource.data)
+          && request.resource.data.id == commentId && request.resource.data.replyCount == 0 && request.resource.data.get('deleted', false) == false;
+        allow update: if canReadPost(post(postId))
+          && ((request.resource.data.diff(resource.data).affectedKeys().hasOnly(['replyCount'])
+              && request.resource.data.replyCount is int && request.resource.data.replyCount >= 0)
+            || ((isOwner(resource.data.uid) || isOwner(post(postId).uid))
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['content', 'deleted'])
+              && request.resource.data.content == '' && request.resource.data.deleted == true));
+        allow delete: if isOwner(resource.data.uid) || isOwner(post(postId).uid);
+        match /replies/{replyId} {
+          allow read: if canReadPost(post(postId)) || isOwner(resource.data.uid);
+          allow create: if isOwner(request.resource.data.uid) && canReadPost(post(postId)) && validComment(request.resource.data)
+            && request.resource.data.id == replyId && request.resource.data.commentId == commentId
+            && exists(/databases/$(database)/documents/posts/$(postId)/comments/$(commentId))
+            && getAfter(/databases/$(database)/documents/posts/$(postId)/comments/$(commentId)).data.get('deleted', false) == false;
+          allow delete: if isOwner(resource.data.uid) || isOwner(post(postId).uid)
+            || isOwner(get(/databases/$(database)/documents/posts/$(postId)/comments/$(commentId)).data.uid);
+        }
+      }
+      match /likes/{likeUid} {
+        allow read: if canReadPost(post(postId)) || isOwner(likeUid);
+        allow create: if isOwner(likeUid) && request.resource.data.uid == likeUid && canReadPost(post(postId));
+        allow delete: if isOwner(likeUid) || isOwner(post(postId).uid);
+      }
+    }
+    // Account deletion uses collection-group queries scoped to the actor's UID.
+    match /{path=**}/comments/{id} { allow read, delete: if isOwner(resource.data.uid); }
+    match /{path=**}/replies/{id} { allow read, delete: if isOwner(resource.data.uid); }
+    match /{path=**}/likes/{id} { allow read, delete: if isOwner(resource.data.uid); }
+    match /{path=**}/notifications/{id} { allow read, delete: if isOwner(resource.data.actorUid); }
+    match /chats/{chatId} {
+      allow get: if active() && (!exists(/databases/$(database)/documents/chats/$(chatId)) || request.auth.uid in resource.data.participantIds);
+      allow list: if active() && request.auth.uid in resource.data.participantIds;
+      allow create: if active() && request.auth.uid in request.resource.data.participantIds
+        && request.resource.data.participantIds.size() >= 2 && request.resource.data.participantIds.size() <= 100;
+      allow update: if chatMember(chatId)
+        && request.resource.data.participantIds.hasAll(resource.data.participantIds)
+        && request.resource.data.participantIds.size() <= 100
+        && (request.resource.data.participantIds == resource.data.participantIds || resource.data.get('kind', 'direct') == 'group');
+      match /messages/{messageId} {
+        allow read: if chatMember(chatId);
+        allow create: if chatMember(chatId) && isOwner(request.resource.data.uid);
+        allow update: if chatMember(chatId) && isOwner(resource.data.uid)
+          && request.resource.data.uid == 'deleted-user'
+          && request.resource.data.content == '탈퇴한 사용자의 메시지입니다.'
+          && request.resource.data.photoUrl == '' && request.resource.data.photoName == ''
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['uid', 'authorNickname', 'content', 'photoUrl', 'photoName']);
+      }
+    }
+    match /livePlaceStatusUpdates/{id} {
+      allow read: if active();
+      allow create: if isOwner(request.resource.data.uid);
+      allow delete: if isOwner(resource.data.uid);
+    }
+    // These collections are accessible exclusively through authenticated server functions.
+    match /moderationCases/{id} { allow read, write: if false; }
+    match /moderationPosts/{id} { allow read, write: if false; }
+    match /moderationUsers/{id} { allow read, write: if false; }
+    match /moderationAudit/{id} { allow read, write: if false; }
+    match /moderationLimits/{id} { allow read, write: if false; }
+    match /adminSessions/{id} { allow read, write: if false; }
+    match /nativePushQueue/{id} { allow read, write: if false; }
+  }
+}
