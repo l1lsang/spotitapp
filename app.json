@@ -1,36 +1,38 @@
 {
   "expo": {
-    "name": "spotit",
+    "name": "피노리",
     "slug": "spotit",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/spotit/app-icon-1024.png",
     "scheme": "spotit",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "usesAppleSignIn": true,
+      "icon": "./assets/spotit/app-icon-1024.png"
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "backgroundColor": "#FFFFFF",
+        "foregroundImage": "./assets/spotit/adaptive-icon-foreground.png",
+        "monochromeImage": "./assets/spotit/adaptive-icon-foreground.png"
       },
       "predictiveBackGestureEnabled": false
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/spotit/favicon.png"
     },
     "plugins": [
       "expo-router",
+      "expo-apple-authentication",
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
+          "backgroundColor": "#F5F4EE",
+          "image": "./assets/spotit/splash-mark.png",
+          "imageWidth": 128,
+          "resizeMode": "contain"
         }
       ],
       "expo-secure-store",

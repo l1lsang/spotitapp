@@ -3,7 +3,6 @@ import type { PinTheme } from './post'
 
 export interface DaymarkUser {
   uid: string
-  email: string
   nickname: string
   username?: string
   bio?: string

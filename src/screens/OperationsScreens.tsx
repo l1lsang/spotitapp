@@ -1,16 +1,23 @@
+import { FormScrollView } from '../components/keyboard'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ActivityIndicator, AppState, FlatList, Image, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
+import { ActivityIndicator, AppState, FlatList, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { Text } from '../components/Typography';
+import { RemoteImage } from '../components/RemoteImage';
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { router, useLocalSearchParams, type Href } from 'expo-router'
 import * as SecureStore from 'expo-secure-store'
 import { randomUUID } from 'expo-crypto'
-import { AtSign, Bell, ChevronDown, ChevronRight, Heart, MessageCircle, ShieldCheck, UserPlus, X } from 'lucide-react-native'
+import { ArrowLeft, AtSign, BellOff, BellRing, CheckCheck, ChevronDown, ChevronRight, ExternalLink, Heart, Inbox, MessageCircle, Phone, Printer, RefreshCw, Search, Send, ShieldCheck, UserPlus, X } from 'lucide-react-native'
 import { Avatar, Button, Chip, Empty, Field, Notice, Row, Screen, p } from '../components/ui'
+import { PageHeading } from '../components/PageHeading'
 import { useAuth } from '../hooks/useAuth'
+import { useBlockedUsers } from '../hooks/useBlockedUsers'
+import { OPERATOR_PHONE, OPERATOR_PHONE_URL } from '../lib/operatorContact'
 import { formatTimestamp } from '../lib/date'
 import { policyNavigation, type PolicyId } from '../lib/policyNavigation'
 import { policies, policyOperator, policyPublication, type PolicyDocument, type PolicySection } from '../data/policies'
 import licenses from '../data/openSourceLicenses.json'
+import fontLicense from '../data/fontLicense.json'
 import { markAllNotificationsAsRead, markNotificationAsRead, subscribeToNotifications } from '../services/notificationService'
 import { disablePushNotifications, enablePushNotifications, getPushPermissionStatus, type PushPermissionStatus } from '../services/pushNotificationService'
 import { getAdminStats, listAdminCases, listMyCases, loginAdmin, logoutAdmin, manageAdminUser, reviewCase, searchAdminUsers, submitInquiry, type AdminStats } from '../services/moderationService'
@@ -19,15 +26,22 @@ import type { DaymarkNotification } from '../types/notification'
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : '요청을 처리하지 못했습니다. 다시 시도해 주세요.'
 const date = (value: number) => value ? new Date(value).toLocaleString('ko-KR') : '기록 없음'
-const reasonLabel = (value: string) => REPORT_REASONS.find(reason => reason.id === value)?.label || (value === 'auto' ? '자동 필터 감지' : '문의')
+const reasonLabel = (value: string) => REPORT_REASONS.find(reason => reason.id === value)?.label || (value === 'auto' ? '자동 필터 감지' : value === 'blocked' ? '사용자 차단' : '문의')
 function Heading({ children, description }: { children: ReactNode; description?: string }) {
   return <View style={st.heading}><Text style={st.title}>{children}</Text>{description ? <Text style={st.description}>{description}</Text> : null}</View>
 }
 function Loading({ label = '불러오는 중…' }: { label?: string }) {
   return <View style={st.loading} accessibilityRole="progressbar"><ActivityIndicator color={p.primary} /><Text style={st.muted}>{label}</Text></View>
 }
+const badgeTones: Record<CaseStatus, { backgroundColor: string; color: string }> = {
+  open: { backgroundColor: p.coralSoft, color: p.ink }, reviewing: { backgroundColor: p.primarySoft, color: p.primary },
+  resolved: { backgroundColor: p.oliveSoft, color: p.ink }, dismissed: { backgroundColor: p.coralSoft, color: p.ink },
+}
 function StatusBadge({ status }: { status: CaseStatus }) {
-  return <View style={[st.badge, status === 'dismissed' && st.badgeMuted]}><Text style={[st.badgeText, status === 'dismissed' && { color: p.muted }]}>{STATUS_LABELS[status]}</Text></View>
+  return <View style={[st.badge, { backgroundColor: badgeTones[status].backgroundColor }]}><Text style={[st.badgeText, { color: badgeTones[status].color }]}>{STATUS_LABELS[status]}</Text></View>
+}
+function BackLink({ title, onPress }: { title: string; onPress: () => void }) {
+  return <Pressable accessibilityRole="link" onPress={onPress} style={st.backLink}><ArrowLeft size={18} color={p.muted} /><Text style={st.backText}>{title}</Text></Pressable>
 }
 function SignedOut({ title }: { title: string }) {
   return <Screen title={title} back><Empty title="로그인이 필요해요" description="로그인하고 내 소식과 접수 내역을 확인해 주세요." /><Button title="로그인" onPress={() => router.push('/login')} /></Screen>
@@ -39,7 +53,9 @@ function openLink(href: string) {
 
 export function NotificationsScreen() {
   const { currentUser, firebaseReady } = useAuth()
-  const [notifications, setNotifications] = useState<DaymarkNotification[]>([])
+  const [allNotifications, setNotifications] = useState<DaymarkNotification[]>([])
+  const { ids: blockedIds } = useBlockedUsers()
+  const notifications = useMemo(() => blockedIds.size ? allNotifications.filter(item => !blockedIds.has(item.actorUid)) : allNotifications, [allNotifications, blockedIds])
   const [pushStatus, setPushStatus] = useState<PushPermissionStatus>('prompt')
   const [pushEnabled, setPushEnabled] = useState(false)
   const [pushMessage, setPushMessage] = useState('')
@@ -49,6 +65,7 @@ export function NotificationsScreen() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [version, setVersion] = useState(0)
+  const narrow = useWindowDimensions().width <= 620
   useEffect(() => {
     if (!currentUser || !firebaseReady) { setNotifications([]); setLoading(false); return }
     setLoading(true); setError('')
@@ -90,25 +107,27 @@ export function NotificationsScreen() {
   }
   if (!currentUser) return <SignedOut title="알림" />
   const unread = notifications.filter(item => !item.readAt).length
-  return <Screen title="알림" back scroll={false}>
-    <FlatList data={notifications} keyExtractor={item => item.id} contentContainerStyle={st.listContent} refreshing={loading} onRefresh={() => setVersion(v => v + 1)}
+  return <Screen scroll={false}>
+    <FlatList data={loading ? [] : notifications} keyExtractor={item => item.id} contentContainerStyle={st.listContent} refreshing={loading} onRefresh={() => setVersion(v => v + 1)}
       ListHeaderComponent={<View style={st.stack}>
-        <Heading description="채팅, 팔로우, 좋아요, 댓글과 멘션 소식을 모아봅니다.">내게 온 소식 {unread ? `· ${unread}` : ''}</Heading>
-        <Button title="모두 읽음" variant="secondary" onPress={() => void markAll()} disabled={!unread} loading={readBusy} />
+        <PageHeading eyebrow="Notifications" title="알림" description="채팅, 팔로우, 좋아요, 댓글·답글과 멘션 소식을 모아봅니다." actions={<Button title="모두 읽음" variant="secondary" tone="plain" icon={<CheckCheck size={17} color={p.ink} />} onPress={() => void markAll()} disabled={!unread} loading={readBusy} />} />
         {error ? <Notice error>{error}</Notice> : null}
-        <View style={st.card}><View style={st.row}><Bell size={21} color={p.primary} /><Text style={st.subtitle}>휴대폰 푸시 알림</Text></View>
-          <Text style={st.description}>{pushEnabled ? '이 기기에서 새로운 소식을 받아보세요.' : pushStatus === 'denied' ? '기기 설정에서 알림 권한을 허용해 주세요.' : pushStatus === 'unsupported' ? '실제 휴대폰에서 푸시 알림을 설정할 수 있어요.' : pushStatus === 'not-configured' ? '푸시 설정이 완료된 앱에서 알림을 켤 수 있어요.' : '새로운 소식을 휴대폰 알림으로 받아보세요.'}</Text>
-          {pushStatus === 'denied' ? <Button title="기기 설정 열기" onPress={() => void Linking.openSettings().catch(e => setError(errorText(e)))} variant="secondary" /> : <Button title={pushEnabled ? '이 기기 끄기' : '푸시 켜기'} onPress={() => void togglePush()} loading={pushBusy} variant={pushEnabled ? 'secondary' : 'primary'} disabled={pushStatus === 'unsupported' || pushStatus === 'not-configured'} />}
+        <View style={[st.pushPanel, narrow && st.pushPanelStacked]}>
+          <View style={[st.stackSmall, !narrow && st.flex]}><Text style={st.pushTitle}>휴대폰 푸시 알림</Text>
+            <Text style={st.description}>{pushEnabled ? '이 기기에서 푸시 알림을 받을 수 있습니다.' : pushStatus === 'denied' ? '기기 설정에서 알림 권한을 허용해 주세요.' : pushStatus === 'unsupported' ? '실제 휴대폰에서 푸시 알림을 설정할 수 있어요.' : pushStatus === 'not-configured' ? '푸시 설정이 완료된 앱에서 알림을 켤 수 있어요.' : '채팅, 팔로우, 좋아요, 댓글과 답글 알림을 휴대폰에서도 받아보세요.'}</Text></View>
+          {pushStatus === 'denied' ? <Button title="기기 설정 열기" onPress={() => void Linking.openSettings().catch(e => setError(errorText(e)))} variant="secondary" />
+            : pushEnabled ? <Button title="이 기기 끄기" icon={<BellOff size={17} color={p.ink} />} onPress={() => void togglePush()} disabled={pushBusy} variant="secondary" />
+            : <Button title={pushBusy ? '설정 중' : '푸시 켜기'} icon={<BellRing size={17} color={p.paper} />} onPress={() => void togglePush()} disabled={pushBusy || pushStatus === 'unsupported' || pushStatus === 'not-configured'} />}
         </View>
         {pushMessage ? <Notice error={pushError}>{pushMessage}</Notice> : null}
       </View>}
-      ListEmptyComponent={loading ? <Loading /> : <Empty title="아직 알림이 없어요" description="새로운 소식이 도착하면 여기에 모아드릴게요." />}
+      ListEmptyComponent={<Text style={st.emptyText}>{loading ? '알림을 불러오는 중입니다.' : '아직 알림이 없습니다.'}</Text>}
       renderItem={({ item }) => {
         const Icon = item.type === 'like' ? Heart : item.type === 'mention' ? AtSign : item.type === 'follow' || item.type === 'follow_request' ? UserPlus : MessageCircle
-        return <Pressable accessibilityRole="button" accessibilityLabel={`${item.readAt ? '' : '읽지 않음. '}${item.title}. ${item.message}`} style={[st.notification, !item.readAt && st.unread]} onPress={() => void openNotification(item)}>
-          {item.actorPhotoURL ? <Avatar uri={item.actorPhotoURL} name={item.actorNickname} size={44} /> : <View style={st.notificationIcon}><Icon size={20} color={p.primary} /></View>}
-          <View style={st.flex}><Text style={st.label}>{item.title}</Text><Text style={st.description}>{item.message}</Text><Text style={st.small}>{formatTimestamp(item.createdAt)}</Text></View>
-          {!item.readAt && <View style={st.dot} />}
+        return <Pressable accessibilityRole="button" accessibilityLabel={`${item.readAt ? '' : '읽지 않음. '}${item.title}. ${item.message}`} style={({ pressed }) => [st.notification, pressed && { backgroundColor: p.surface }]} onPress={() => void openNotification(item)}>
+          {item.actorPhotoURL ? <Avatar uri={item.actorPhotoURL} name={item.actorNickname} size={48} /> : <View style={st.notificationIcon}><Icon size={19} color={p.primaryHover} /></View>}
+          <View style={[st.flex, { gap: 5 }]}><Text numberOfLines={1} style={st.notificationTitle}>{item.title}</Text><Text numberOfLines={1} style={st.notificationText}>{item.message}</Text><Text style={st.notificationTime}>{formatTimestamp(item.createdAt)}</Text></View>
+          {!item.readAt && <View accessibilityLabel="읽지 않은 알림" style={st.dot} />}
         </Pressable>
       }} />
   </Screen>
@@ -142,21 +161,30 @@ export function SupportScreen() {
     } catch (e) { setError(errorText(e)) } finally { setBusy(false) }
   }
   if (!currentUser) return <SignedOut title="문의·신고 내역" />
-  return <Screen title="문의·신고 내역" back refreshing={loading} onRefresh={() => void refresh()}>
-    <Heading description="궁금한 점이나 불편했던 경험을 알려 주세요.">무엇을 도와드릴까요?</Heading>
+  return <Screen refreshing={loading} onRefresh={() => void refresh()}>
+    <PageHeading eyebrow="Support" title="문의·신고 내역" description="궁금한 점이나 불편했던 경험을 알려 주세요." />
     {error ? <Notice error>{error}</Notice> : null}{success ? <Notice>{success}</Notice> : null}
-    <View style={st.card}><View style={st.row}><MessageCircle size={22} color={p.primary} /><Text style={st.subtitle}>문의하기</Text></View>
-      <Field label="제목" value={title} onChangeText={setTitle} editable={!busy} maxLength={100} placeholder="어떤 도움이 필요하세요?" />
-      <Field label="문의 내용" value={details} onChangeText={setDetails} editable={!busy} maxLength={2000} multiline textAlignVertical="top" style={st.textarea} placeholder="상황을 자세히 적어 주시면 확인에 도움이 됩니다." />
-      <Text style={st.counter}>{details.length.toLocaleString()} / 2,000자</Text>
-      <Button title="문의 보내기" onPress={() => void submit()} loading={busy} disabled={!title.trim() || !details.trim()} />
+    <View style={st.listSection}>
+      <Text accessibilityRole="header" style={st.listHeading}>운영자에게 연락하기</Text>
+      <Pressable accessibilityRole="link" accessibilityLabel={`운영자에게 전화하기 ${OPERATOR_PHONE}`} onPress={() => openLink(OPERATOR_PHONE_URL)} style={({ pressed }) => [st.listRow, pressed && { opacity: 0.6 }]}>
+        <Phone size={18} color={p.muted} /><View style={[st.flex, st.stackSmall]}><Text style={st.body}>전화 문의</Text><Text style={st.small}>부적절한 사용자·콘텐츠 신고, 계정 문의</Text></View><Text style={st.link}>{OPERATOR_PHONE}</Text>
+      </Pressable>
+      <View style={[st.listRow, st.listDivider]}><ShieldCheck size={18} color={p.muted} /><Text style={[st.small, st.flex]}>신고와 차단 내역은 운영자에게 바로 전달되며, 확인 후 콘텐츠 숨김·이용 정지 등으로 처리합니다.</Text></View>
     </View>
-    <View style={st.spaceRow}><Text style={st.subtitle}>내 접수 내역</Text><Pressable accessibilityRole="button" disabled={loading} onPress={() => void refresh()} style={st.textButton}><Text style={st.link}>새로고침</Text></Pressable></View>
-    {loading ? <Loading /> : !cases.length ? <Empty title="아직 접수한 내역이 없어요" description="문의나 신고를 보내면 처리 상태와 답변을 여기서 확인할 수 있어요." /> : cases.map(item => <View key={item.id} style={st.card}>
-      <View style={st.spaceRow}><Text style={st.small}>{CASE_LABELS[item.kind]} · {new Date(item.createdAt).toLocaleDateString('ko-KR')}</Text><StatusBadge status={item.status} /></View>
-      <Text style={st.label}>{item.title}</Text>{item.details ? <Text style={st.body}>{item.details}</Text> : null}
-      {item.reply ? <View style={st.reply}><Text style={st.label}>스팟잇 답변</Text><Text style={st.body}>{item.reply}</Text></View> : null}
-    </View>)}
+    <View style={st.panel}><View style={st.stackSmall}><Text accessibilityRole="header" style={st.listHeading}>문의하기</Text><Text style={st.small}>남겨 주신 내용을 확인하고 답변드릴게요.</Text></View>
+      <Field label="제목" value={title} onChangeText={setTitle} editable={!busy} maxLength={100} placeholder="어떤 도움이 필요하세요?" />
+      <View style={st.stackSmall}><Field label="문의 내용" value={details} onChangeText={setDetails} editable={!busy} maxLength={2000} multiline textAlignVertical="top" style={st.textarea} placeholder="상황을 자세히 적어 주시면 확인에 도움이 됩니다." />
+        <Text style={st.counter}>{details.length.toLocaleString()} / 2,000자</Text></View>
+      <Button title={busy ? '접수 중…' : '문의 보내기'} icon={<Send size={17} color={p.paper} />} onPress={() => void submit()} loading={busy} disabled={!title.trim() || !details.trim()} style={{ minHeight: 46 }} />
+    </View>
+    <View style={st.panel}>
+      <View style={[st.spaceRow, st.historyHeading]}><Text accessibilityRole="header" style={st.listHeading}>내 접수 내역</Text><Button title="새로고침" variant="secondary" icon={<RefreshCw size={15} color={p.ink} />} disabled={loading} onPress={() => { setError(''); void refresh() }} style={st.smallButton} /></View>
+      {loading ? <Loading label="내역을 불러오는 중…" /> : !cases.length ? <View style={st.supportEmpty}><Inbox size={30} color={p.primary} /><Text style={st.label}>아직 접수한 내역이 없어요</Text><Text style={[st.small, { textAlign: 'center', lineHeight: 23 }]}>{'문의나 신고를 보내면\n처리 상태와 답변을 여기서 확인할 수 있어요.'}</Text></View> : cases.map((item, index) => <View key={item.id} style={[st.supportCase, index === cases.length - 1 && { borderBottomWidth: 0, paddingBottom: 0 }]}>
+        <View style={st.spaceRow}><Text style={st.small}>{CASE_LABELS[item.kind]} · {new Date(item.createdAt).toLocaleDateString('ko-KR')}</Text><StatusBadge status={item.status} /></View>
+        <Text style={st.label}>{item.title}</Text>{item.details ? <Text selectable style={st.body}>{item.details}</Text> : null}
+        {item.reply ? <View style={st.replyLine}><Text style={st.label}>피노리 답변</Text><Text selectable style={st.body}>{item.reply}</Text></View> : null}
+      </View>)}
+    </View>
   </Screen>
 }
 
@@ -218,7 +246,7 @@ export function AdminScreen() {
     finally { setVerified(false); setSession(null); await clearAdminStorage() }
   }
   if (session && verified) return <AdminDashboard token={session.token} onLogout={logout} />
-  return <Screen title="관리실" back><View style={st.adminHero}><ShieldCheck size={50} color={p.primary} /><Text style={st.eyebrow}>SPOTIT ADMIN</Text><Heading description="더 안전하고 즐거운 장소 기록을 위해.">스팟잇 관리실</Heading></View>
+  return <Screen title="관리실" back><View style={st.adminHero}><ShieldCheck size={50} color={p.primary} /><Text style={st.eyebrow}>PINORI ADMIN</Text><Heading description="더 안전하고 즐거운 장소 기록을 위해.">피노리 관리실</Heading></View>
     {restoring || session ? <Loading label="관리자 권한을 확인하는 중…" /> : <View style={st.card}>
       <Field label="관리자 비밀번호" value={password} onChangeText={setPassword} editable={!busy} maxLength={200} secureTextEntry autoCapitalize="none" autoComplete="current-password" placeholder="비밀번호를 입력하세요" onSubmitEditing={() => void login()} />
       {error ? <Notice error>{error}</Notice> : null}<Button title="관리자 접속" loading={busy} disabled={!password.trim()} onPress={() => void login()} />
@@ -242,9 +270,9 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => Pr
     { label: '전체 채팅방', value: stats.chats, detail: '1:1 · 단체 채팅방' },
     { label: '미처리 접수', value: stats.openCases, detail: '신고 · 문의 · 자동 검토' },
   ] : []
-  return <Screen title="스팟잇 관리실" back refreshing={busy} onRefresh={() => void refresh()}>
+  return <Screen title="피노리 관리실" back refreshing={busy} onRefresh={() => void refresh()}>
     <View style={st.chips}>{(['overview', 'cases', 'users'] as const).map(value => <Chip key={value} label={value === 'overview' ? '통계' : value === 'cases' ? '신고·문의' : '유저 관리'} selected={tab === value} onPress={() => setTab(value)} />)}</View>
-    <Heading description={tab === 'overview' ? '서비스 현황과 지금 확인할 일을 살펴보세요.' : tab === 'cases' ? '접수된 내용을 확인하고 처리 결과를 남겨 주세요.' : '유저를 검색하고 계정 이용 상태를 관리하세요.'}>{tab === 'overview' ? '한눈에 보는 스팟잇' : tab === 'cases' ? '신고·문의 관리' : '유저 관리'}</Heading>
+    <Heading description={tab === 'overview' ? '서비스 현황과 지금 확인할 일을 살펴보세요.' : tab === 'cases' ? '접수된 내용을 확인하고 처리 결과를 남겨 주세요.' : '유저를 검색하고 계정 이용 상태를 관리하세요.'}>{tab === 'overview' ? '한눈에 보는 피노리' : tab === 'cases' ? '신고·문의 관리' : '유저 관리'}</Heading>
     {error ? <Notice error>{error}</Notice> : null}
     {tab === 'overview' && <>
       {!stats ? <Loading label="통계를 불러오는 중…" /> : <View style={st.metrics}>{metrics.map(metric => <View style={st.metric} key={metric.label}><Text style={st.muted}>{metric.label}</Text><Text style={st.metricValue}>{metric.value.toLocaleString('ko-KR')}</Text><Text style={st.small}>{metric.detail}</Text></View>)}</View>}
@@ -323,7 +351,7 @@ function CaseDetail({ item, token, onClose, onSaved }: { item: ModerationCase; t
 function EvidencePhoto({ url }: { url: string }) {
   const [expanded, setExpanded] = useState(false)
   if (!/^https?:\/\//i.test(url)) return null
-  return <><Pressable accessibilityRole="button" accessibilityLabel="신고 사진 확대" onPress={() => setExpanded(true)}><Image source={{ uri: url }} style={st.evidencePhoto} resizeMode="contain" /></Pressable>{expanded && <Modal animationType="fade" visible onRequestClose={() => setExpanded(false)}><SafeAreaView style={st.fullPhoto}><Pressable accessibilityRole="button" accessibilityLabel="사진 닫기" style={st.photoClose} onPress={() => setExpanded(false)}><X size={26} color="white" /></Pressable><Image source={{ uri: url }} style={st.flex} resizeMode="contain" /></SafeAreaView></Modal>}</>
+  return <><Pressable accessibilityRole="button" accessibilityLabel="신고 사진 확대" onPress={() => setExpanded(true)}><RemoteImage uri={url} style={st.evidencePhoto} contentFit="contain" /></Pressable>{expanded && <Modal animationType="fade" visible onRequestClose={() => setExpanded(false)}><SafeAreaView style={st.fullPhoto}><Pressable accessibilityRole="button" accessibilityLabel="사진 닫기" style={st.photoClose} onPress={() => setExpanded(false)}><X size={26} color="white" /></Pressable><RemoteImage uri={url} style={st.flex} contentFit="contain" /></SafeAreaView></Modal>}</>
 }
 
 function UsersPanel({ token, onChanged }: { token: string; onChanged: () => Promise<void> }) {
@@ -377,7 +405,7 @@ function UserDetail({ user, token, onClose, onSaved }: { user: AdminUser; token:
 }
 
 function DetailModal({ title, busy, onClose, children }: { title: string; busy: boolean; onClose: () => void; children: ReactNode }) {
-  return <Modal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={() => { if (!busy) onClose() }}><SafeAreaView style={st.modal}><KeyboardAvoidingView style={st.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><View style={st.modalHeader}><Text style={st.subtitle}>{title}</Text><Pressable accessibilityRole="button" accessibilityLabel="상세 창 닫기" disabled={busy} style={st.textButton} onPress={onClose}><X color={p.ink} size={24} /></Pressable></View><ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={st.modalContent}>{children}</ScrollView></KeyboardAvoidingView></SafeAreaView></Modal>
+  return <Modal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={() => { if (!busy) onClose() }}><SafeAreaView style={st.modal}><View style={st.flex}><View style={st.modalHeader}><Text style={st.subtitle}>{title}</Text><Pressable accessibilityRole="button" accessibilityLabel="상세 창 닫기" disabled={busy} style={st.textButton} onPress={onClose}><X color={p.ink} size={24} /></Pressable></View><FormScrollView contentContainerStyle={st.modalContent}>{children}</FormScrollView></View></SafeAreaView></Modal>
 }
 
 export function PoliciesScreen() {
@@ -391,6 +419,8 @@ export function PoliciesScreen() {
   const jumped = useRef('')
   const [printing, setPrinting] = useState(false)
   const [printError, setPrintError] = useState('')
+  const { currentUser } = useAuth()
+  const wide = useWindowDimensions().width > 600
   useEffect(() => {
     jumped.current = ''
     if (!targetSection) scroll.current?.scrollTo({ y: 0, animated: false })
@@ -409,27 +439,36 @@ export function PoliciesScreen() {
       if (!/cancel|closed|printing did not complete/i.test(errorText(e))) setPrintError(errorText(e))
     } finally { setPrinting(false) }
   }
-  if (policyId && !document) return <Screen title="약관 및 정책" back><Empty title="문서를 찾을 수 없습니다" /><Button title="약관 및 정책 목록" onPress={() => router.replace('/policies')} /></Screen>
-  return <Screen title={navigation?.title || '약관 및 정책'} back scroll={false}><ScrollView ref={scroll} contentContainerStyle={st.listContent}>
-    <View style={st.stack}><Heading description={`시행일 ${policyPublication.effectiveDate} · 버전 ${policyPublication.version}`}>{navigation?.title || '약관 및 정책'}</Heading>
-      <Notice>약관 및 개인정보처리방침 개정 안내{ '\n' }만 14세 미만 가입 제한, 가입 시 필수·선택 동의, 개인정보 보관·파기와 Firebase 미국 서버로의 국외이전 기준을 안내합니다.</Notice>
+  const title = navigation?.title || (policyId ? '문서를 찾을 수 없습니다' : '약관 및 정책')
+  const back = policyId
+    ? <BackLink title="약관 및 정책" onPress={() => router.push('/policies')} />
+    : <BackLink title={currentUser ? '설정으로 돌아가기' : '돌아가기'} onPress={() => router.canGoBack() ? router.back() : router.replace(currentUser ? '/profile/settings' : '/')} />
+  const heading = <View style={[st.policyHeading, wide && st.policyHeadingWide]}>
+    <Text accessibilityRole="header" style={[st.policyTitle, wide && { fontSize: 32, lineHeight: 43 }]}>{title}</Text>
+    {document ? <Button title="인쇄" variant="secondary" icon={<Printer size={16} color={p.ink} />} loading={printing} onPress={() => void printDocument()} /> : null}
+  </View>
+  if (policyId && !document) return <Screen maxWidth={960}>{back}{heading}<View style={st.supportEmpty}><Text style={[st.description, { textAlign: 'center' }]}>주소를 확인하거나 약관 및 정책 목록에서 문서를 선택해 주세요.</Text><Pressable accessibilityRole="link" style={st.tocRow} onPress={() => router.replace('/policies')}><Text style={st.link}>목록 보기</Text></Pressable></View></Screen>
+  return <Screen maxWidth={960} scroll={false}><ScrollView ref={scroll} contentContainerStyle={[st.listContent, { maxWidth: 960 }]}>
+    <View style={st.stack}>{back}{heading}
+      {printError ? <Notice error>{printError}</Notice> : null}
+      <View accessibilityLabel="문서 개정 안내" style={st.draftNotice}><Text style={st.draftTitle}>약관 및 개인정보처리방침 개정 안내</Text><Text style={st.draftBody}>만 14세 미만 가입 제한, 가입 시 필수·선택 동의, 개인정보 보관·파기와 Firebase 미국 서버로의 국외이전 기준을 안내합니다.</Text><Text style={st.draftMeta}>작성일 {policyPublication.preparedAt} · 시행일 {policyPublication.effectiveDate} · {policyPublication.version}</Text></View>
       {document ? <>
-        <Button title="인쇄" variant="secondary" loading={printing} onPress={() => void printDocument()} />
-        {printError ? <Notice error>{printError}</Notice> : null}
-        <Text style={st.body}>{document.introduction}</Text>
-        <View style={st.card}><Text style={st.subtitle}>목차</Text>{document.sections.map((section, index) => <Pressable key={section.id} accessibilityRole="button" style={st.tocRow} onPress={() => scroll.current?.scrollTo({ y: (positions.current[`${policyId}-${section.id}`] || 0) + 20, animated: true })}><Text style={st.link}>{index + 1}. {section.title}</Text></Pressable>)}</View>
-        {document.sections.map(section => <View key={`${policyId}-${section.id}`} onLayout={event => {
+        <Text style={st.introduction}>{document.introduction}</Text>
+        <View style={st.toc}><Text style={st.tocTitle}>목차</Text><View style={st.tocList}>{document.sections.map(section => <Pressable key={section.id} accessibilityRole="link" style={[st.tocRow, wide && st.tocRowWide]} onPress={() => scroll.current?.scrollTo({ y: (positions.current[`${policyId}-${section.id}`] || 0) + 20, animated: true })}><Text style={st.tocLink}>{section.title}</Text></Pressable>)}</View></View>
+        <View>{document.sections.map(section => <View key={`${policyId}-${section.id}`} onLayout={event => {
           positions.current[`${policyId}-${section.id}`] = event.nativeEvent.layout.y
           if (targetSection === section.id && jumped.current !== `${policyId}-${targetSection}`) {
             jumped.current = `${policyId}-${targetSection}`
             scroll.current?.scrollTo({ y: event.nativeEvent.layout.y + 20, animated: false })
           }
-        }}><PolicySectionView section={section} /></View>)}
-        <View style={st.card}><Text style={st.subtitle}>다른 약관 및 정책</Text>{policyNavigation.filter(item => item.id !== policyId).map(item => <Row key={item.id} title={item.title} onPress={() => router.push(`/policies/${item.id}` as Href)} />)}<Row title="오픈소스 라이선스" onPress={() => router.push('/licenses')} /></View>
+        }}><PolicySectionView section={section} /></View>)}</View>
+        <View accessibilityLabel="다른 약관 및 정책" style={st.otherDocuments}>{policyNavigation.filter(item => item.id !== policyId).map(item => <Pressable key={item.id} accessibilityRole="link" style={st.tocRow} onPress={() => router.push(`/policies/${item.id}` as Href)}><Text style={st.tocLink}>{item.title}</Text></Pressable>)}<Pressable accessibilityRole="link" style={st.tocRow} onPress={() => router.push('/licenses')}><Text style={st.tocLink}>오픈소스 라이선스</Text></Pressable></View>
       </> : <>
-        <Text style={st.body}>서비스 이용 기준과 개인정보·위치정보 보호에 관한 문서를 한곳에서 확인하세요.</Text>
-        <View style={st.card}>{policyNavigation.map(item => <Row key={item.id} title={item.title} subtitle={item.description} onPress={() => router.push(`/policies/${item.id}` as Href)} />)}<Row title="오픈소스 라이선스" subtitle="함께 사용한 오픈소스와 라이선스 고지" onPress={() => router.push('/licenses')} /></View>
-        <View style={st.card}><Text style={st.subtitle}>운영자 연락처</Text><Text style={st.body}>{policyOperator.name} · {policyOperator.address}</Text><Button title={policyOperator.phone} variant="secondary" onPress={() => openLink(policyOperator.phoneHref)} /></View>
+        <Text style={st.introduction}>서비스 이용 기준과 개인정보·위치정보 보호에 관한 문서를 한곳에서 확인하세요.</Text>
+        <View accessibilityLabel="약관 및 정책 목록" style={st.directory}>{[...policyNavigation.map(item => ({ key: item.id, title: item.title, description: item.description, href: `/policies/${item.id}` })), { key: 'licenses', title: '오픈소스 라이선스', description: '함께 사용한 오픈소스와 라이선스 고지', href: '/licenses' }].map((item, index) => <Pressable key={item.key} accessibilityRole="link" onPress={() => router.push(item.href as Href)} style={({ pressed }) => [st.directoryRow, index > 0 && st.directorySeparator, pressed && { backgroundColor: p.primarySoft }]}>
+          <View style={[st.flex, { gap: 7 }]}><Text style={st.directoryTitle}>{item.title}</Text><Text style={st.small}>{item.description}</Text></View><ChevronRight size={18} color={p.muted} />
+        </Pressable>)}</View>
+        <View style={st.contact}><Text accessibilityRole="header" style={st.contactTitle}>운영자 연락처</Text><Text style={st.description}>{policyOperator.name} · {policyOperator.address}</Text><Pressable accessibilityRole="link" style={[st.row, st.tocRow, { gap: 8 }]} onPress={() => openLink(policyOperator.phoneHref)}><Phone size={16} color={p.primary} /><Text style={st.link}>{policyOperator.phone}</Text></Pressable></View>
       </>}
     </View>
   </ScrollView></Screen>
@@ -438,44 +477,95 @@ export function PoliciesScreen() {
 function printablePolicy(title: string, document: PolicyDocument): string {
   const escape = (value: string) => value.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character] || character)
   const paragraph = (value: string) => `<p>${escape(value)}</p>`
-  const sections = document.sections.map(section => `<section><h2>${escape(section.title)}</h2>${(section.paragraphs || []).map(paragraph).join('')}${section.bullets ? `<ul>${section.bullets.map(value => `<li>${escape(value)}</li>`).join('')}</ul>` : ''}${section.table ? `<table><caption>${escape(section.table.caption)}</caption><thead><tr>${section.table.headers.map(value => `<th>${escape(value)}</th>`).join('')}</tr></thead><tbody>${section.table.rows.map(row => `<tr>${row.map(value => `<td>${escape(value)}</td>`).join('')}</tr>`).join('')}</tbody></table>` : ''}${section.note ? `<aside>${escape(section.note)}</aside>` : ''}${section.links ? section.links.map(link => `<p>${escape(link.label)}: ${escape(link.href.startsWith('/') ? `${process.env.EXPO_PUBLIC_WEB_URL || 'https://spotitmap.kr'}${link.href}` : link.href)}</p>`).join('') : ''}</section>`).join('')
-  return `<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)} | 스팟잇</title><style>@page{size:A4;margin:18mm}body{font-family:Arial,sans-serif;font-size:11pt;line-height:1.7;color:#252824}h1{font-size:23pt}h2{font-size:15pt;break-after:avoid}p,li{white-space:pre-wrap}table{width:100%;border-collapse:collapse;font-size:9pt;margin:14px 0}th,td{border:1px solid #aaa;padding:8px;text-align:left;vertical-align:top}thead{display:table-header-group}tr{break-inside:avoid}aside{padding:10px;background:#f3f3ee}caption{text-align:left;font-weight:bold}</style></head><body><h1>${escape(title)}</h1><p>스팟잇 · 시행일 ${escape(policyPublication.effectiveDate)} · ${escape(policyPublication.version)}</p>${paragraph(document.introduction)}${sections}</body></html>`
+  const sections = document.sections.map(section => `<section><h2>${escape(section.title)}</h2>${(section.paragraphs || []).map(paragraph).join('')}${section.bullets ? `<ul>${section.bullets.map(value => `<li>${escape(value)}</li>`).join('')}</ul>` : ''}${section.table ? `<table><caption>${escape(section.table.caption)}</caption><thead><tr>${section.table.headers.map(value => `<th>${escape(value)}</th>`).join('')}</tr></thead><tbody>${section.table.rows.map(row => `<tr>${row.map(value => `<td>${escape(value)}</td>`).join('')}</tr>`).join('')}</tbody></table>` : ''}${section.note ? `<aside>${escape(section.note)}</aside>` : ''}${section.links ? section.links.map(link => `<p>${escape(link.label)}: ${escape(link.href.startsWith('/') ? `${process.env.EXPO_PUBLIC_WEB_URL || 'https://www.pinori.kr'}${link.href}` : link.href)}</p>`).join('') : ''}</section>`).join('')
+  return `<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)} | 피노리</title><style>@page{size:A4;margin:18mm}body{font-family:Arial,sans-serif;font-size:11pt;line-height:1.7;color:#252824}h1{font-size:23pt}h2{font-size:15pt;break-after:avoid}p,li{white-space:pre-wrap}table{width:100%;border-collapse:collapse;font-size:9pt;margin:14px 0}th,td{border:1px solid #aaa;padding:8px;text-align:left;vertical-align:top}thead{display:table-header-group}tr{break-inside:avoid}aside{padding:10px;background:#f3f3ee}caption{text-align:left;font-weight:bold}</style></head><body><h1>${escape(title)}</h1><p>피노리 · 시행일 ${escape(policyPublication.effectiveDate)} · ${escape(policyPublication.version)}</p>${paragraph(document.introduction)}${sections}</body></html>`
 }
 
 function PolicySectionView({ section }: { section: PolicySection }) {
-  return <View style={st.policySection}><Text style={st.subtitle}>{section.title}</Text>
-    {section.paragraphs?.map((paragraph, index) => <Text selectable style={st.policyBody} key={index}>{paragraph}</Text>)}
-    {section.bullets?.map((paragraph, index) => <View style={st.bulletRow} key={index}><Text style={st.body}>•</Text><Text selectable style={[st.policyBody, st.flex]}>{paragraph}</Text></View>)}
-    {section.table ? <View style={st.stackSmall}><Text style={st.label}>{section.table.caption}</Text><ScrollView horizontal showsHorizontalScrollIndicator><View style={st.table}><View style={st.tableRow}>{section.table.headers.map((header, index) => <Text key={index} style={[st.tableCell, st.tableHeader]}>{header}</Text>)}</View>{section.table.rows.map((cells, rowIndex) => <View key={rowIndex} style={st.tableRow}>{cells.map((cell, columnIndex) => <Text key={columnIndex} selectable style={st.tableCell}>{cell}</Text>)}</View>)}</View></ScrollView><Text style={st.small}>표를 좌우로 밀어 전체 내용을 확인하세요.</Text></View> : null}
-    {section.note ? <Notice>시행 전 확인{ '\n' }{section.note}</Notice> : null}
-    {section.links?.map(link => <Pressable accessibilityRole="link" key={link.href} style={st.tocRow} onPress={() => openLink(link.href)}><Text style={st.link}>{link.label} ↗</Text></Pressable>)}
+  const compact = useWindowDimensions().width <= 600
+  const body = compact ? [st.policyBody, { fontSize: 14.4, lineHeight: 28 }] : st.policyBody
+  return <View style={st.policySection}><Text accessibilityRole="header" style={st.policySectionTitle}>{section.title}</Text>
+    {section.paragraphs?.map((paragraph, index) => <Text selectable style={body} key={index}>{paragraph}</Text>)}
+    {section.bullets ? <View style={{ gap: 10 }}>{section.bullets.map((paragraph, index) => <View style={st.bulletRow} key={index}><Text style={body}>•</Text><Text selectable style={[body, st.flex]}>{paragraph}</Text></View>)}</View> : null}
+    {section.table ? <View style={st.stackSmall}><View style={st.tableScroll}><Text style={st.tableCaption}>{section.table.caption}</Text><ScrollView horizontal showsHorizontalScrollIndicator><View>
+      <View style={st.tableRow}>{section.table.headers.map((header, index) => <Text key={index} style={[st.tableCell, st.tableHeader]}>{header}</Text>)}</View>
+      {section.table.rows.map((cells, rowIndex) => <View key={rowIndex} style={st.tableRow}>{cells.map((cell, columnIndex) => <Text key={columnIndex} selectable style={[st.tableCell, columnIndex === 0 && { width: 160, fontWeight: '600' }]}>{cell}</Text>)}</View>)}
+    </View></ScrollView></View><Text style={st.small}>표를 좌우로 밀어 전체 내용을 확인하세요.</Text></View> : null}
+    {section.note ? <View style={st.sectionNote}><Text style={st.noteTitle}>시행 전 확인</Text><Text style={st.noteText}>{section.note}</Text></View> : null}
+    {section.links?.length ? <View>{section.links.map(link => <Pressable accessibilityRole="link" key={link.href} style={[st.row, st.tocRow, { gap: 6 }]} onPress={() => openLink(link.href)}><Text style={st.underlineLink}>{link.label}</Text>{link.href.startsWith('/') ? <ChevronRight size={14} color={p.primary} /> : <ExternalLink size={14} color={p.primary} />}</Pressable>)}</View> : null}
   </View>
 }
 
 const scopeLabels: Record<string, string> = { app: '앱', server: '서버', development: '개발 도구' }
-const licenseTexts: Record<string, string> = licenses.texts
+const licenseTexts: Record<string, string> = { ...licenses.texts, pretendard: fontLicense.text }
+const licensePackages = [...licenses.packages, fontLicense.package]
 type LicensePackage = typeof licenses.packages[number]
-function LicenseItem({ entry }: { entry: LicensePackage }) {
+function LicenseItem({ entry, first, last }: { entry: LicensePackage; first: boolean; last: boolean }) {
   const [expanded, setExpanded] = useState(false)
-  return <View style={st.licenseItem}><Pressable accessibilityRole="button" accessibilityState={{ expanded }} style={st.licenseHeader} onPress={() => setExpanded(!expanded)}><View style={st.flex}><Text style={st.label}>{entry.name}</Text><Text style={st.small}>v{entry.version} · {entry.scopes.map(scope => scopeLabels[scope] || scope).join(' · ')}</Text><Text style={st.licenseBadge}>{entry.license}</Text></View><ChevronDown color={p.muted} size={20} style={expanded ? { transform: [{ rotate: '180deg' }] } : undefined} /></Pressable>
-    {expanded ? <View style={st.licenseContent}>{entry.repository.startsWith('https://') ? <Pressable accessibilityRole="link" onPress={() => openLink(entry.repository)}><Text style={st.link}>프로젝트 저장소 ↗</Text></Pressable> : null}{entry.documents.map((document, index) => <View key={`${document.textId}-${index}`} style={st.stack}><Text style={st.subtitle}>{document.title}</Text>{document.source.startsWith('https://') ? <Pressable accessibilityRole="link" onPress={() => openLink(document.source)}><Text style={st.link}>원문 출처 ↗</Text></Pressable> : null}<Text selectable style={st.licenseText}>{licenseTexts[document.textId]}</Text></View>)}</View> : null}
+  const compact = useWindowDimensions().width <= 480
+  return <View style={[st.licenseItem, first && st.licenseFirst, last && st.licenseLast, !first && st.licenseSeparator]}>
+    <Pressable accessibilityRole="button" accessibilityState={{ expanded }} style={({ pressed }) => [st.licenseHeader, compact && { paddingHorizontal: 12, paddingVertical: 16, gap: 8 }, (expanded || pressed) && { backgroundColor: p.primarySoft }]} onPress={() => setExpanded(!expanded)}>
+      <View style={[st.flex, { gap: 6 }]}><Text style={st.licenseName}>{entry.name}</Text><Text style={st.licenseMeta}>v{entry.version} · {entry.scopes.map(scope => scopeLabels[scope] || scope).join(' · ')}</Text></View>
+      <Text style={st.licenseBadge}>{entry.license}</Text>
+      <ChevronDown color={p.muted} size={20} style={expanded ? { transform: [{ rotate: '180deg' }] } : undefined} />
+    </Pressable>
+    {expanded ? <View style={[st.licenseContent, compact && { padding: 12 }]}>{entry.repository.startsWith('https://') ? <Pressable accessibilityRole="link" style={[st.row, st.tocRow, { gap: 6 }]} onPress={() => openLink(entry.repository)}><Text style={st.underlineLink}>프로젝트 저장소</Text><ExternalLink size={14} color={p.primary} /></Pressable> : null}{entry.documents.map((document, index) => <View key={`${document.textId}-${index}`} style={st.stackSmall}><Text style={st.licenseDocTitle}>{document.title}</Text>{document.source.startsWith('https://') ? <Pressable accessibilityRole="link" style={[st.row, st.tocRow, { gap: 6 }]} onPress={() => openLink(document.source)}><Text style={st.underlineLink}>원문 출처</Text><ExternalLink size={14} color={p.primary} /></Pressable> : null}<ScrollView nestedScrollEnabled style={st.licensePre} contentContainerStyle={{ padding: 16 }}><Text selectable style={st.licenseText}>{licenseTexts[document.textId]}</Text></ScrollView></View>)}</View> : null}
   </View>
 }
 
 export function LicensesScreen() {
   const [query, setQuery] = useState('')
   const [scope, setScope] = useState('all')
-  const filtered = useMemo(() => licenses.packages.filter(entry => (scope === 'all' || entry.scopes.includes(scope)) && `${entry.name} ${entry.version} ${entry.license}`.toLowerCase().includes(query.trim().toLowerCase())), [query, scope])
-  return <Screen title="오픈소스 라이선스" back scroll={false}><FlatList data={filtered} keyExtractor={item => `${item.name}@${item.version}`} contentContainerStyle={st.listContent} initialNumToRender={12} maxToRenderPerBatch={12} keyboardShouldPersistTaps="handled" ListHeaderComponent={<View style={st.stack}><Heading description="스팟잇을 만드는 데 함께한 오픈소스 프로젝트입니다.">오픈소스 라이선스</Heading><Text style={st.body}>항목을 누르면 저작권 고지와 라이선스 원문을 확인할 수 있습니다.</Text><Field label="라이브러리 검색" value={query} onChangeText={setQuery} autoCapitalize="none" autoCorrect={false} placeholder="이름 또는 라이선스로 검색" /><View style={st.chips}>{[['all', '전체'], ...Object.entries(scopeLabels)].map(([value, label]) => <Chip key={value} label={label} selected={scope === value} onPress={() => setScope(value)} />)}</View><Text style={st.small}>전체 {licenses.packages.length}개 중 {filtered.length}개</Text></View>} ListEmptyComponent={<View style={st.stack}><Empty title="검색 결과가 없습니다" description="검색어나 사용 범위를 바꿔 보세요." /><Button title="전체 목록 보기" variant="secondary" onPress={() => { setQuery(''); setScope('all') }} /></View>} renderItem={({ item }) => <LicenseItem entry={item} />} /></Screen>
+  const wide = useWindowDimensions().width > 640
+  const filtered = useMemo(() => licensePackages.filter(entry => (scope === 'all' || entry.scopes.includes(scope)) && `${entry.name} ${entry.version} ${entry.license}`.toLowerCase().includes(query.trim().toLowerCase())), [query, scope])
+  return <Screen maxWidth={880} scroll={false}><FlatList data={filtered} keyExtractor={item => `${item.name}@${item.version}`} contentContainerStyle={[st.listContent, { maxWidth: 880, gap: 0 }]} initialNumToRender={12} maxToRenderPerBatch={12} keyboardShouldPersistTaps="handled"
+    ListHeaderComponent={<View style={[st.stack, { paddingBottom: 12 }]}>
+      <BackLink title="약관 및 정책" onPress={() => router.push('/policies')} />
+      <View style={st.stackSmall}><Text accessibilityRole="header" style={[st.policyTitle, wide && { fontSize: 32, lineHeight: 40 }]}>오픈소스 라이선스</Text><Text style={st.description}>피노리를 만드는 데 함께한 오픈소스 프로젝트입니다.</Text></View>
+      <Text style={st.licensesDescription}>앱, 서버, 개발 도구와 각 프로젝트가 사용하는 라이브러리를 포함합니다. 항목을 누르면 저작권 고지와 라이선스 원문을 확인할 수 있습니다.</Text>
+      <Field label="라이브러리 검색" icon={<Search size={18} color={p.muted} />} value={query} onChangeText={setQuery} autoCapitalize="none" autoCorrect={false} returnKeyType="search" placeholder="이름 또는 라이선스로 검색" />
+      <View style={st.stackSmall}><Text style={st.filterLabel}>사용 범위</Text><View style={st.chips}>{[['all', '전체'], ...Object.entries(scopeLabels)].map(([value, label]) => <Chip key={value} label={label} selected={scope === value} onPress={() => setScope(value)} />)}</View></View>
+      <Text style={[st.small, { marginTop: 4 }]}>전체 {licensePackages.length}개 중 {filtered.length}개</Text>
+    </View>}
+    ListEmptyComponent={<View style={st.supportEmpty}><Text style={[st.description, { textAlign: 'center' }]}>검색 결과가 없습니다. 검색어나 사용 범위를 바꿔 보세요.</Text><Button title="전체 목록 보기" variant="secondary" onPress={() => { setQuery(''); setScope('all') }} /></View>}
+    renderItem={({ item, index }) => <LicenseItem entry={item} first={index === 0} last={index === filtered.length - 1} />} /></Screen>
 }
 
 const st = StyleSheet.create({
-  flex: { flex: 1 }, heading: { gap: 7, paddingVertical: 7 }, title: { color: p.ink, fontSize: 27, fontWeight: '800', letterSpacing: -0.8 }, subtitle: { color: p.ink, fontSize: 18, fontWeight: '700' }, label: { color: p.ink, fontSize: 15, fontWeight: '700', lineHeight: 23 }, body: { color: p.ink, fontSize: 14, lineHeight: 23 }, muted: { color: p.muted, fontSize: 14 }, description: { color: p.muted, fontSize: 14, lineHeight: 22 }, small: { color: p.muted, fontSize: 12, lineHeight: 19 }, link: { color: p.primary, fontSize: 14, lineHeight: 23, fontWeight: '600' }, eyebrow: { fontSize: 12, color: p.primary, letterSpacing: 1.4, fontWeight: '700' },
-  stack: { gap: 16 }, stackSmall: { gap: 5 }, listContent: { padding: 20, paddingBottom: 45, gap: 12, flexGrow: 1 }, card: { backgroundColor: p.paper, borderColor: p.line, borderWidth: 1, padding: 18, borderRadius: 21, gap: 13 }, row: { flexDirection: 'row', alignItems: 'center', gap: 11 }, spaceRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 9 }, chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, textButton: { padding: 8 }, loading: { paddingVertical: 28, alignItems: 'center', gap: 12 },
-  notification: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 16, backgroundColor: p.paper, borderRadius: 19, borderWidth: 1, borderColor: p.line }, unread: { backgroundColor: p.primarySoft }, notificationIcon: { backgroundColor: p.paper, borderRadius: 22, height: 44, width: 44, alignItems: 'center', justifyContent: 'center' }, dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: p.primary },
-  textarea: { minHeight: 125 }, counter: { fontSize: 12, color: p.muted, textAlign: 'right', marginTop: -7 }, reply: { backgroundColor: p.primarySoft, borderRadius: 14, padding: 14, gap: 7 }, badge: { paddingVertical: 5, paddingHorizontal: 9, borderRadius: 10, backgroundColor: p.primarySoft }, badgeText: { color: p.primary, fontWeight: '700', fontSize: 11 }, badgeMuted: { backgroundColor: p.surface },
-  adminHero: { paddingVertical: 35, alignItems: 'center', gap: 14 }, metrics: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 }, metric: { width: '47%', flexGrow: 1, borderWidth: 1, borderColor: p.line, borderRadius: 20, backgroundColor: p.paper, padding: 18, gap: 9 }, metricValue: { color: p.ink, fontSize: 32, fontWeight: '800' },
-  modal: { flex: 1, backgroundColor: p.bg }, modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderColor: p.line, paddingHorizontal: 20, paddingVertical: 13 }, modalContent: { padding: 20, paddingBottom: 45, gap: 16 }, evidencePhoto: { width: '100%', height: 230, borderRadius: 15, backgroundColor: p.surface }, fullPhoto: { flex: 1, backgroundColor: '#111111' }, photoClose: { padding: 20, alignSelf: 'flex-end' },
-  policySection: { gap: 15, paddingVertical: 18, borderBottomWidth: 1, borderColor: p.line }, policyBody: { color: p.ink, fontSize: 15, lineHeight: 26 }, bulletRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 9 }, tocRow: { paddingVertical: 6 }, table: { borderTopWidth: 1, borderLeftWidth: 1, borderColor: p.line, backgroundColor: p.paper }, tableRow: { flexDirection: 'row' }, tableCell: { width: 220, padding: 12, fontSize: 13, lineHeight: 21, color: p.ink, borderRightWidth: 1, borderBottomWidth: 1, borderColor: p.line }, tableHeader: { fontWeight: '700', backgroundColor: p.surface },
-  licenseItem: { backgroundColor: p.paper, borderRadius: 17, borderWidth: 1, borderColor: p.line, overflow: 'hidden' }, licenseHeader: { padding: 17, flexDirection: 'row', alignItems: 'center', gap: 12 }, licenseBadge: { color: p.primary, fontSize: 12, fontWeight: '700', marginTop: 5 }, licenseContent: { padding: 17, gap: 21, borderTopWidth: 1, borderColor: p.line }, licenseText: { fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', color: p.ink, fontSize: 11, lineHeight: 18 },
+  flex: { flex: 1 }, heading: { gap: 7, paddingVertical: 7 }, title: { color: p.ink, fontSize: 28, lineHeight: 38, fontWeight: '600', letterSpacing: -0.8 }, subtitle: { color: p.ink, fontSize: 18, fontWeight: '700' }, label: { color: p.ink, fontSize: 15, fontWeight: '700', lineHeight: 23 }, body: { color: p.ink, fontSize: 14, lineHeight: 23 }, muted: { color: p.muted, fontSize: 14 }, description: { color: p.muted, fontSize: 14, lineHeight: 22 }, small: { color: p.muted, fontSize: 12, lineHeight: 19 }, link: { color: p.primary, fontSize: 14, lineHeight: 23, fontWeight: '600' }, eyebrow: { fontSize: 12, color: p.primary, letterSpacing: 1.4, fontWeight: '700' },
+  stack: { gap: 16 }, stackSmall: { gap: 5 }, listContent: { padding: 16, paddingTop: 32, paddingBottom: 112, gap: 16, flexGrow: 1, width: '100%', maxWidth: 808, alignSelf: 'center' }, card: { backgroundColor: p.paper, borderColor: p.line, borderWidth: 1, padding: 18, borderRadius: 6, gap: 13 }, row: { flexDirection: 'row', alignItems: 'center', gap: 11 }, spaceRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 9 }, chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, textButton: { padding: 8 }, loading: { paddingVertical: 28, alignItems: 'center', gap: 12 },
+  // Notifications: a quiet list — no row rules or unread tint; the dot carries unread state.
+  notification: { minHeight: 88, flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14, paddingHorizontal: 12 }, notificationIcon: { backgroundColor: p.primarySoft, borderRadius: 24, height: 48, width: 48, alignItems: 'center', justifyContent: 'center' }, dot: { width: 9, height: 9, borderRadius: 5, backgroundColor: p.primary },
+  notificationTitle: { color: p.ink, fontSize: 15, lineHeight: 22, fontWeight: '600' }, notificationText: { color: p.muted, fontSize: 13.8, lineHeight: 20 }, notificationTime: { color: p.light, fontSize: 13.8, lineHeight: 20 },
+  pushPanel: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 14, padding: 16, borderRadius: 6, backgroundColor: p.paper }, pushPanelStacked: { flexDirection: 'column', alignItems: 'stretch' }, pushTitle: { color: p.ink, fontSize: 16, fontWeight: '600' },
+  emptyText: { color: p.muted, fontSize: 14, lineHeight: 25, textAlign: 'center', paddingVertical: 48 },
+  // Support: panels without outline or fill; history keeps one rule per case.
+  panel: { gap: 20, paddingVertical: 20, borderTopWidth: 1, borderColor: p.line },
+  listSection: { paddingTop: 8 }, listHeading: { color: p.muted, fontSize: 13.6, fontWeight: '700', paddingBottom: 6 },
+  listRow: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 56, paddingVertical: 10 }, listDivider: { borderTopWidth: 1, borderColor: p.line },
+  replyLine: { gap: 7, paddingLeft: 12, borderLeftWidth: 2, borderColor: p.primary }, headingIcon: { width: 46, height: 46, borderRadius: 14, backgroundColor: p.coralSoft, alignItems: 'center', justifyContent: 'center' }, panelTitle: { color: p.ink, fontSize: 18, fontWeight: '600' },
+  historyHeading: { paddingBottom: 20, borderBottomWidth: 1, borderColor: p.line }, smallButton: { minHeight: 36, paddingVertical: 6, paddingHorizontal: 12 },
+  supportEmpty: { alignItems: 'center', gap: 14, paddingVertical: 48, paddingHorizontal: 8 }, supportCase: { gap: 12, paddingVertical: 24, borderBottomWidth: 1, borderColor: p.line },
+  backLink: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 44, alignSelf: 'flex-start' }, backText: { color: p.muted, fontSize: 14.4 },
+  textarea: { minHeight: 125 }, counter: { fontSize: 12, color: p.muted, textAlign: 'right' }, reply: { backgroundColor: p.oliveSoft, borderRadius: 10, padding: 16, gap: 7 }, badge: { paddingVertical: 5, paddingHorizontal: 9, borderRadius: 6, backgroundColor: p.primarySoft }, badgeText: { color: p.primary, fontWeight: '600', fontSize: 11.5 }, badgeMuted: { backgroundColor: p.surface },
+  adminHero: { paddingVertical: 35, alignItems: 'center', gap: 14 }, metrics: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 }, metric: { width: '47%', flexGrow: 1, borderWidth: 1, borderColor: p.line, borderRadius: 6, backgroundColor: p.paper, padding: 18, gap: 9 }, metricValue: { color: p.ink, fontSize: 32, fontWeight: '800' },
+  modal: { flex: 1, backgroundColor: p.bg }, modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderColor: p.line, paddingHorizontal: 20, paddingVertical: 13 }, modalContent: { padding: 20, paddingBottom: 45, gap: 16 }, evidencePhoto: { width: '100%', height: 230, borderRadius: 6, backgroundColor: p.surface }, fullPhoto: { flex: 1, backgroundColor: '#111111' }, photoClose: { padding: 20, alignSelf: 'flex-end' },
+  // Long documents: reading width, ruled sections, one bordered table of contents.
+  policyHeading: { gap: 16 }, policyHeadingWide: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' }, policyTitle: { flexShrink: 1, color: p.ink, fontSize: 24, lineHeight: 32, fontWeight: '600', letterSpacing: -0.9 },
+  draftNotice: { gap: 8, paddingVertical: 18, paddingHorizontal: 20, borderRadius: 10, backgroundColor: p.coralSoft }, draftTitle: { color: p.ink, fontSize: 14.7, fontWeight: '700' }, draftBody: { color: p.ink, fontSize: 14, lineHeight: 25 }, draftMeta: { color: p.ink, fontSize: 12, lineHeight: 20 },
+  introduction: { color: p.muted, fontSize: 15, lineHeight: 28.5, marginVertical: 8 },
+  toc: { padding: 20, borderWidth: 1, borderColor: p.line, borderRadius: 6, backgroundColor: p.paper, gap: 12 }, tocTitle: { color: p.ink, fontSize: 16, fontWeight: '600' }, tocList: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 20 }, tocRowWide: { width: '47%' }, tocLink: { color: p.primary, fontSize: 13.9, lineHeight: 22 },
+  otherDocuments: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 20, rowGap: 8, paddingVertical: 24 },
+  directory: { overflow: 'hidden', borderWidth: 1, borderColor: p.line, borderRadius: 6, backgroundColor: p.paper }, directoryRow: { flexDirection: 'row', alignItems: 'center', gap: 14, padding: 20 }, directorySeparator: { borderTopWidth: 1, borderColor: p.line }, directoryTitle: { color: p.ink, fontSize: 15.7, lineHeight: 23, fontWeight: '600' },
+  contact: { marginTop: 12, paddingVertical: 20, gap: 8, borderTopWidth: 1, borderColor: p.line }, contactTitle: { color: p.ink, fontSize: 16, fontWeight: '600' },
+  policySection: { gap: 12, paddingVertical: 26, borderBottomWidth: 1, borderColor: p.line }, policySectionTitle: { color: p.ink, fontSize: 18.4, lineHeight: 27.6, fontWeight: '600', marginBottom: 4 }, policyBody: { color: p.ink, fontSize: 15, lineHeight: 29 }, bulletRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 9 }, tocRow: { minHeight: 44, justifyContent: 'center' },
+  tableScroll: { overflow: 'hidden', borderWidth: 1, borderColor: p.line, borderRadius: 8, backgroundColor: p.paper }, tableCaption: { paddingVertical: 12, paddingHorizontal: 16, color: p.muted, fontSize: 13.6, fontWeight: '700' }, tableRow: { flexDirection: 'row' }, tableCell: { width: 220, paddingVertical: 12, paddingHorizontal: 16, fontSize: 13.6, lineHeight: 25, color: p.ink, borderTopWidth: 1, borderColor: p.line }, tableHeader: { fontWeight: '700', color: p.primary, backgroundColor: p.primarySoft },
+  sectionNote: { gap: 5, marginTop: 6, paddingVertical: 14, paddingHorizontal: 16, borderLeftWidth: 3, borderColor: p.coral, backgroundColor: p.coralSoft }, noteTitle: { color: p.ink, fontSize: 13.8, fontWeight: '700' }, noteText: { color: p.ink, fontSize: 13.8, lineHeight: 23 },
+  underlineLink: { color: p.primary, fontSize: 14, textDecorationLine: 'underline' },
+  licensesDescription: { color: p.muted, fontSize: 14.4, lineHeight: 26 }, filterLabel: { color: p.ink, fontSize: 14, fontWeight: '500' },
+  licenseItem: { backgroundColor: p.paper, borderLeftWidth: 1, borderRightWidth: 1, borderColor: p.line, overflow: 'hidden' }, licenseFirst: { borderTopWidth: 1, borderTopLeftRadius: 6, borderTopRightRadius: 6 }, licenseLast: { borderBottomWidth: 1, borderBottomLeftRadius: 6, borderBottomRightRadius: 6 }, licenseSeparator: { borderTopWidth: 1 },
+  licenseHeader: { minHeight: 84, padding: 18, flexDirection: 'row', alignItems: 'center', gap: 12 }, licenseName: { color: p.ink, fontSize: 15.2, fontWeight: '600' }, licenseMeta: { color: p.muted, fontSize: 12.2, lineHeight: 18 },
+  licenseBadge: { maxWidth: '36%', paddingVertical: 5, paddingHorizontal: 8, borderRadius: 5, overflow: 'hidden', color: p.primary, backgroundColor: p.primarySoft, fontSize: 11.5, fontWeight: '700' },
+  licenseContent: { padding: 18, gap: 12, borderTopWidth: 1, borderColor: p.line }, licenseDocTitle: { color: p.ink, fontSize: 13.6, fontWeight: '700', marginTop: 8 },
+  licensePre: { maxHeight: 480, borderWidth: 1, borderColor: p.line, borderRadius: 8, backgroundColor: p.bg }, licenseText: { fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', color: p.ink, fontSize: 12.5, lineHeight: 21 },
 })

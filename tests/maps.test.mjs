@@ -1,14 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { getMapProvider, getExternalMapUrl, isValidLocation } from '../src/lib/mapLocation.ts'
+import { getExternalMapUrl, isValidLocation } from '../src/lib/mapLocation.ts'
 import { clusterPosts } from '../src/lib/mapClusters.ts'
-
-test('Korean cities and islands use Kakao; overseas and neighboring Japan use Google', () => {
-  const korea = [[37.5665, 126.978], [35.1796, 129.0756], [33.4996, 126.5312], [37.4845, 130.9057], [37.2411, 131.8675], [37.966, 124.63]]
-  const overseas = [[35.6762, 139.6503], [34.7, 129.45], [34.2, 129.29], [35.1, 129.6], [48.8566, 2.3522], [40.7128, -74.006], [-33.8688, 151.2093], [39.0392, 125.7625]]
-  for (const [lat, lng] of korea) assert.equal(getMapProvider({ lat, lng }), 'kakao', `${lat},${lng}`)
-  for (const [lat, lng] of overseas) assert.equal(getMapProvider({ lat, lng }), 'google', `${lat},${lng}`)
-})
+import { getDirectionsUrl, startMapDirections } from '../src/lib/mapDirections.ts'
+import { withLocationTimeout } from '../src/lib/locationTimeout.ts'
+import { projectMapPoint } from '../src/lib/mapProjection.ts'
 
 test('equator and prime meridian are valid; malformed coordinates are rejected', () => {
   for (const location of [{ lat: 0, lng: 0 }, { lat: 0, lng: 20 }, { lat: 51.5, lng: 0 }]) assert.ok(isValidLocation(location))
@@ -45,11 +41,82 @@ test('invalid coordinates never reach SDK projection', () => {
   assert.deepEqual(clusterPosts([], project), [])
 })
 
-test('external map links carry the exact pin coordinates and safely encode names', () => {
-  const domestic = getExternalMapUrl({ lat: 37.5, lng: 127 }, '카페 / & #')
-  assert.ok(domestic.startsWith('https://map.kakao.com/link/map/'))
-  assert.ok(domestic.includes(encodeURIComponent('카페 / & #')))
-  assert.ok(domestic.endsWith(',37.5,127'))
-  const abroad = new URL(getExternalMapUrl({ lat: 48.85, lng: 2.35 }, 'Paris'))
-  assert.equal(abroad.searchParams.get('query'), '48.85,2.35')
+test('every external map link uses Google with exact pin coordinates', () => {
+  for (const location of [{ lat: 37.5, lng: 127 }, { lat: 48.85, lng: 2.35 }, { lat: 0, lng: 0 }]) {
+    const url = new URL(getExternalMapUrl(location))
+    assert.equal(url.origin, 'https://www.google.com')
+    assert.equal(url.pathname, '/maps/search/')
+    assert.equal(url.searchParams.get('query'), `${location.lat},${location.lng}`)
+  }
+  assert.throws(() => getExternalMapUrl({ lat: NaN, lng: 127 }))
+})
+
+test('native Mercator projection separates nearby pins at higher zoom and wraps the date line', () => {
+  const center = { lat: 37.5, lng: 127 }
+  const posts = [post('one', 37.5, 127), post('two', 37.5005, 127)]
+  assert.equal(clusterPosts(posts, point => projectMapPoint(point, center, 15)).length, 1)
+  assert.equal(clusterPosts(posts, point => projectMapPoint(point, center, 18)).length, 2)
+  const edge = projectMapPoint({ lat: 0, lng: -179.999 }, { lat: 0, lng: 179.999 }, 10)
+  assert.ok(Math.abs(edge.x) < 2)
+  assert.equal(edge.y, 0)
+  assert.ok(Number.isFinite(projectMapPoint({ lat: 90, lng: 0 }, center, 15).y))
+})
+
+test('directions explicitly carry current origin, selected destination and travel mode', () => {
+  const origin = { lat: 37.5, lng: 127 }
+  const destination = { lat: 37.54, lng: 127.03 }
+  for (const mode of ['transit', 'walking', 'driving']) {
+    const url = new URL(getDirectionsUrl(origin, destination, mode))
+    assert.equal(url.origin, 'https://www.google.com')
+    assert.equal(url.pathname, '/maps/dir/')
+    assert.equal(url.searchParams.get('api'), '1')
+    assert.equal(url.searchParams.get('origin'), '37.5,127')
+    assert.equal(url.searchParams.get('destination'), '37.54,127.03')
+    assert.equal(url.searchParams.get('travelmode'), mode)
+  }
+  assert.equal(new URL(getDirectionsUrl({ lat: 0, lng: 0 }, destination)).searchParams.get('travelmode'), 'transit')
+  assert.throws(() => getDirectionsUrl(origin, destination, 'flying'))
+  assert.throws(() => getDirectionsUrl(origin, { lat: 91, lng: 0 }))
+})
+
+test('missing or invalid current location never opens directions or guesses an origin', async () => {
+  for (const origin of [null, undefined, { lat: NaN, lng: 127 }, { lat: 91, lng: 0 }]) {
+    await assert.rejects(startMapDirections({ lat: 37.5, lng: 127 }, 'transit', {
+      getCurrentLocation: async () => origin,
+      openUrl: async () => assert.fail('Must not open without a current location'),
+      isCancelled: () => false,
+    }), /현재 위치를 확인할 수 없어/)
+  }
+})
+
+test('directions use fresh GPS and report launch failure without claiming no route exists', async () => {
+  const events = []
+  const actions = {
+    getCurrentLocation: async () => { events.push('gps'); return { lat: 0, lng: 0 } },
+    openUrl: async url => { events.push('open'); assert.equal(new URL(url).searchParams.get('origin'), '0,0') },
+    isCancelled: () => false,
+  }
+  assert.equal(await startMapDirections({ lat: 37.5, lng: 127 }, 'transit', actions), true)
+  assert.deepEqual(events, ['gps', 'open'])
+  await assert.rejects(startMapDirections({ lat: 37.5, lng: 127 }, 'transit', { ...actions, openUrl: async () => { throw new Error('unavailable') } }), /Google 지도를 열지 못해/)
+})
+
+test('closing the dialog while GPS is pending prevents a late map launch', async () => {
+  let resolveLocation
+  let cancelled = false
+  const result = startMapDirections({ lat: 37.5, lng: 127 }, 'transit', {
+    getCurrentLocation: () => new Promise(resolve => { resolveLocation = resolve }),
+    openUrl: async () => assert.fail('Closed dialog must not open maps'),
+    isCancelled: () => cancelled,
+  })
+  cancelled = true
+  resolveLocation({ lat: 37.54, lng: 127.03 })
+  assert.equal(await result, false)
+})
+
+test('GPS wait is bounded and preserves successful results and errors', async () => {
+  await assert.rejects(withLocationTimeout(new Promise(() => {}), 5), /현재 위치를 확인하는 데 시간이 오래/)
+  const point = { lat: 37.5, lng: 127 }
+  assert.equal(await withLocationTimeout(Promise.resolve(point), 100), point)
+  await assert.rejects(withLocationTimeout(Promise.reject(new Error('GPS off')), 100), /GPS off/)
 })

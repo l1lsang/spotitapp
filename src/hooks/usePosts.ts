@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFocusEffect } from "expo-router";
 import { useAuth } from "./useAuth";
+import { useBlockedUsers, withoutBlocked } from "./useBlockedUsers";
 import {
   getProfilePosts,
   getUserPosts,
@@ -10,12 +11,13 @@ import {
 } from "../services/postService";
 import { invalidateAppReads } from "../lib/readCache";
 import type { Post } from "../types/post";
+const EMPTY_POSTS: Post[] = [];
 export function usePosts(
   kind: "visible" | "mine" | "liked" = "visible",
   ownerUid?: string,
   pageSize = 80,
 ) {
-  const { currentUser, firebaseReady } = useAuth();
+  const { currentUser, accountReady: firebaseReady } = useAuth();
   const uid = currentUser?.uid;
   const revision = useRef(0);
   const moreLock = useRef(false);
@@ -24,6 +26,10 @@ export function usePosts(
   const [error, setError] = useState("");
   const [cursor, setCursor] = useState<PostPageCursor | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [likesRevision, setLikesRevision] = useState(0);
+  const { ids: blockedIds } = useBlockedUsers();
+  // Blocked members disappear from every list the moment the block is saved.
+  const shown = useMemo(() => withoutBlocked(posts, blockedIds), [posts, blockedIds]);
   const refresh = useCallback(async () => {
     const run = ++revision.current;
     setError("");
@@ -34,7 +40,7 @@ export function usePosts(
       return;
     }
     if (kind === "liked") {
-      setLoading(false);
+      setLikesRevision(value => value + 1);
       return;
     }
     setLoading(true);
@@ -65,7 +71,7 @@ export function usePosts(
     }
   }, [kind, ownerUid, uid, firebaseReady, pageSize]);
   const loadMore = useCallback(async () => {
-    if (!uid || !cursor || moreLock.current || loading) return;
+    if (!firebaseReady || !uid || !cursor || moreLock.current || loading) return;
     const run = revision.current;
     moreLock.current = true;
     setLoadingMore(true);
@@ -89,7 +95,7 @@ export function usePosts(
       moreLock.current = false;
       setLoadingMore(false);
     }
-  }, [uid, cursor, loading, pageSize]);
+  }, [uid, cursor, loading, pageSize, firebaseReady]);
   useFocusEffect(
     useCallback(() => {
       // Likes use a live subscription. Returning to this screen must not clear
@@ -121,9 +127,9 @@ export function usePosts(
         setLoading(false);
       },
     );
-  }, [kind, uid, firebaseReady]);
+  }, [kind, uid, firebaseReady, likesRevision]);
   return {
-    posts,
+    posts: firebaseReady ? shown : EMPTY_POSTS,
     loading,
     error,
     refresh,

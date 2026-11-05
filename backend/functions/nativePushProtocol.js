@@ -6,7 +6,7 @@ function buildExpoMessage(token, notification, notificationId) {
   const href = typeof notification.href === 'string' && notification.href.startsWith('/') && !notification.href.startsWith('//')
     ? notification.href.slice(0, 500) : '/notifications'
   return {
-    to: token, title: String(notification.title || '스팟잇').slice(0, 100),
+    to: token, title: String(notification.title || '피노리').slice(0, 100),
     body: String(notification.message || '새 알림이 도착했습니다.').slice(0, 350),
     sound: 'default', channelId: 'default', ttl: 86400,
     collapseId: notificationId, tag: notificationId,

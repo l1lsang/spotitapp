@@ -1,6 +1,6 @@
 # 네이티브 앱 오픈소스 고지
 
-`src/data/openSourceLicenses.json`은 앱의 `package-lock.json`과 서버의 `backend/functions/package-lock.json`에 있는 **843개 패키지, 675개 고지 본문**을 포함합니다. 원본 웹 프로젝트의 460개 목록을 그대로 사용하는 대신 현재 두 잠금 파일의 패키지 이름·버전·무결성·직접 의존성·사용 범위에 맞춰 다시 생성했습니다.
+`src/data/openSourceLicenses.json`은 앱의 `package-lock.json`과 서버의 `backend/functions/package-lock.json`에 있는 **846개 패키지, 676개 고지 본문**을 포함합니다. 원본 웹 프로젝트의 460개 목록을 그대로 사용하는 대신 현재 두 잠금 파일의 패키지 이름·버전·무결성·직접 의존성·사용 범위에 맞춰 다시 생성했습니다.
 
 ## 출처 범위
 
@@ -10,6 +10,8 @@
 - 위 117개 항목에는 `noticeBasis`와 **Notice source and coverage** 문서를 추가했습니다. 별도 상류 LICENSE/NOTICE의 독립 취득 여부와 확보 범위를 앱의 라이선스 상세에서도 확인할 수 있습니다.
 
 생성기의 검증은 잠금 파일과 고지 목록의 일치, 누락·중복 및 저장 본문의 SHA-256을 확인합니다. 전체 법적 준수나 상류 프로젝트의 모든 고지 확보를 판정하는 검사는 아닙니다.
+
+지도는 Google Maps를 사용하며 SDK의 지도 저작권·출처 표시는 유지합니다. 카카오 지도 로컬 모듈과 Maven·CocoaPods 의존성은 제거했습니다. 카카오 로그인 패키지는 계속 사용합니다.
 
 ## 갱신과 검증
 

@@ -1,15 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ActivityIndicator, Alert, Image, Modal, Pressable, StyleSheet, Switch, Text, View } from 'react-native'
+import { ActivityIndicator, Alert, Linking, Modal, Pressable, StyleSheet, View, useWindowDimensions, type StyleProp, type ViewStyle } from 'react-native';
+import { Text } from '../components/Typography';
+import { RemoteImage } from '../components/RemoteImage';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router'
-import { Camera, Grid3X3, Heart, List, Lock, MapPin, Settings, X } from 'lucide-react-native'
+import { ArrowLeft, Ban, BookOpen, Camera, Check, ChevronLeft, ChevronRight, Clock, Crop, Ellipsis, Flag, Grid3X3, Heart, Lock, LogOut, MapPin, MessageCircle, RefreshCw, Save, Settings, Trash2, UserMinus, UserPlus, UserRoundCheck, X } from 'lucide-react-native'
 import { updateProfile } from 'firebase/auth'
-import { Avatar, Button, Empty, Field, H, Notice, Row, Screen, Txt, p, s } from '../components/ui'
+import { Avatar, Button, Empty, Field, IconButton, Notice, QuietSurface, Screen, elevation, p, s } from '../components/ui'
+import { Dialog } from '../components/Dialog'
 import { PinThemeEditor } from '../components/PinThemeEditor'
 import { PhotoEditor } from '../components/PhotoEditor'
-import { PostCard } from '../components/PostCard'
-import { ReportButton } from '../components/ReportButton'
+import { PageHeading } from '../components/PageHeading'
+import { ReportDialog } from '../components/ReportButton'
+import { BlockUserDialog } from '../components/BlockUserDialog'
+import { useBlockedUsers } from '../hooks/useBlockedUsers'
+import { unblockUser } from '../services/blockService'
+import { formatTimestamp } from '../lib/date'
+import { PinAlbumGrid } from '../components/PinAlbumGrid'
 import { useAuth } from '../hooks/useAuth'
+import { useLikedPosts, useProfileAlbum, type LikedPostsState, type ProfileAlbumState } from '../hooks/useProfileAlbum'
 import { policyNavigation } from '../lib/policyNavigation'
+import { OPERATOR_PHONE, OPERATOR_PHONE_URL } from '../lib/operatorContact'
 import { BIO_MAX_LENGTH, NICKNAME_MAX_LENGTH, USERNAME_MAX_LENGTH, getUsernameError } from '../lib/userProfile'
 import { authErrorMessage, deleteAccount, logout, reauthenticateAccount } from '../services/authService'
 import { getOrCreateDirectChat } from '../services/chatService'
@@ -18,10 +28,10 @@ import {
   getFollowers, getFollowing, getIncomingFollowRequests, hasPendingFollowRequest,
   isFollowing, removeFollower, unfollowUser,
 } from '../services/followService'
-import { getProfilePosts } from '../services/postService'
 import { uploadProfilePhoto, type UploadPhoto } from '../services/storageService'
 import { getUserProfile, updateUserPrivacy, updateUserProfileDetails } from '../services/userService'
 import type { FollowEdge, FollowRequest } from '../types/follow'
+import type { ReportTarget } from '../types/moderation'
 import type { DaymarkUser } from '../types/user'
 import { pickProfilePhoto } from './AuthScreens'
 
@@ -31,36 +41,47 @@ const sortedPeople = (people: FollowEdge[]) => [...people].sort((a, b) => (b.cre
 
 export function ProfileScreen() {
   const { currentUser } = useAuth()
-  return currentUser ? <PersonProfile key={currentUser.uid} userId={currentUser.uid} /> : <Screen title="내 프로필"><Empty title="로그인하고 내 기록을 만나보세요" /><Button title="로그인" onPress={() => router.push('/login')} /></Screen>
+  const { tab } = useLocalSearchParams<{ tab?: string }>()
+  return currentUser ? <PersonProfile key={currentUser.uid} userId={currentUser.uid} tab={tab} /> : <Screen title="내 프로필"><Empty title="로그인하고 내 기록을 만나보세요" /><Button title="로그인" onPress={() => router.push('/login')} /></Screen>
 }
 
 export function PersonProfileScreen() {
-  const { userId } = useLocalSearchParams<{ userId: string }>()
-  return <PersonProfile key={userId} userId={userId || ''} />
+  const { userId, from } = useLocalSearchParams<{ userId: string; from?: string }>()
+  return <PersonProfile key={userId} userId={userId || ''} from={from} />
 }
 
-function PersonProfile({ userId }: { userId: string }) {
+// Profile: identity and counts first, then the same square pin grid as the feed.
+function PersonProfile({ userId, from, tab: requestedTab }: { userId: string; from?: string; tab?: string }) {
   const { currentUser, profile, refreshProfile } = useAuth()
+  const { width } = useWindowDimensions()
   const [details, setDetails] = useState<ProfileDetails | null>(null)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+  const [loadError, setLoadError] = useState('')
+  const [actionError, setActionError] = useState('')
   const [action, setAction] = useState('')
   const [revision, setRevision] = useState(0)
   const [list, setList] = useState<FollowListKind | null>(null)
   const actionLock = useRef(false)
   const own = currentUser?.uid === userId
   const viewerUid = currentUser?.uid
+  const { ids: blockedIds } = useBlockedUsers()
+  const blocked = !own && blockedIds.has(userId)
+  // Tabs replace the URL parameter, so returning from a pin lands on the same tab.
+  const tab = own && requestedTab === 'likes' ? 'likes' : 'pins'
+  const albumState = useProfileAlbum(userId, viewerUid, revision)
+  const likedState = useLikedPosts(viewerUid, own && tab === 'likes')
+  const pinCount = albumState.album && albumState.album.access !== 'locked' ? albumState.album.posts.length : null
 
   useFocusEffect(useCallback(() => {
     let active = true
-    setLoading(true); setError('')
+    setLoading(true); setLoadError('')
     Promise.all([
       getUserProfile(userId, true),
       own || !viewerUid ? Promise.resolve(false) : isFollowing(viewerUid, userId),
       own || !viewerUid ? Promise.resolve(false) : hasPendingFollowRequest(viewerUid, userId),
     ]).then(([user, followed, requested]) => {
       if (active) setDetails({ user: user?.onboardingComplete === false ? null : user, followed, requested })
-    }).catch(err => { if (active) setError(authErrorMessage(err, '프로필을 불러오지 못했습니다.')) })
+    }).catch(err => { if (active) setLoadError(authErrorMessage(err, '프로필을 불러오지 못했습니다.')) })
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
   }, [own, viewerUid, userId, revision]))
@@ -69,107 +90,198 @@ function PersonProfile({ userId }: { userId: string }) {
 
   async function follow() {
     if (!profile || !viewerUid || !user || own || actionLock.current) return
-    actionLock.current = true; setAction('follow'); setError('')
+    actionLock.current = true; setAction('follow'); setActionError('')
     try {
       if (details?.followed) await unfollowUser(viewerUid, userId)
       else if (details?.requested) await cancelFollowRequest(viewerUid, userId)
       else await followUser(profile, user)
       await refreshProfile()
       setRevision(value => value + 1)
-    } catch (err) { setError(authErrorMessage(err)) }
+    } catch (err) { setActionError(authErrorMessage(err, '팔로우 상태를 변경하지 못했습니다.')) }
+    finally { actionLock.current = false; setAction('') }
+  }
+
+  async function unblock() {
+    if (!viewerUid || actionLock.current) return
+    actionLock.current = true; setAction('unblock'); setActionError('')
+    try { await unblockUser(viewerUid, userId); setRevision(value => value + 1) }
+    catch (err) { setActionError(authErrorMessage(err, '차단을 해제하지 못했습니다.')) }
     finally { actionLock.current = false; setAction('') }
   }
 
   async function chat() {
     if (!profile || !user || actionLock.current) return
-    actionLock.current = true; setAction('chat'); setError('')
+    actionLock.current = true; setAction('chat'); setActionError('')
     try { const chatId = await getOrCreateDirectChat(profile, user); router.push(`/chats/${chatId}`) }
-    catch (err) { setError(authErrorMessage(err, '채팅을 시작하지 못했습니다.')) }
+    catch (err) { setActionError(authErrorMessage(err, '채팅을 시작하지 못했습니다.')) }
     finally { actionLock.current = false; setAction('') }
   }
 
-  return <Screen title={own ? '내 프로필' : '프로필'} back={!own} refreshing={loading} onRefresh={() => setRevision(value => value + 1)}
-    right={own ? <Pressable style={v.iconButton} accessibilityRole="button" accessibilityLabel="프로필 설정" onPress={() => router.push('/profile/settings')}><Settings color={p.ink} size={23} /></Pressable> : undefined}>
-    {loading && !user && <ActivityIndicator color={p.primary} />}
-    {!!error && <Notice error>{error}</Notice>}
-    {!loading && !user && <Empty title="프로필을 찾을 수 없습니다" description="탈퇴했거나 아직 프로필을 완성하지 않은 사용자입니다." />}
-    {user && <>
-      <View style={s.card}>
-        <View style={v.identity}><Avatar uri={user.photoURL} name={user.nickname} size={90} />
-          <View style={v.identityText}><Text style={v.nickname}>{user.nickname || '스팟잇 사용자'}</Text>
-            {!!user.username && <Text style={v.handle}>@{user.username}</Text>}
-            <View style={v.stats}>
-              <Pressable accessibilityRole="button" accessibilityLabel={`팔로워 ${user.followerCount || 0}명`} onPress={() => setList('followers')} style={v.stat}><Text style={v.statNumber}>{user.followerCount || 0}</Text><Text style={s.muted}>팔로워</Text></Pressable>
-              <View style={v.statDivider} />
-              <Pressable accessibilityRole="button" accessibilityLabel={`팔로잉 ${user.followingCount || 0}명`} onPress={() => setList('following')} style={v.stat}><Text style={v.statNumber}>{user.followingCount || 0}</Text><Text style={s.muted}>팔로잉</Text></Pressable>
-            </View>
-          </View>
+  const followed = !!details?.followed
+  const requested = !!details?.requested
+  const FollowIcon = followed ? UserRoundCheck : requested ? Clock : UserPlus
+  const handle = user ? (user.username ? `@${user.username}` : user.nickname || '피노리 사용자') : (own ? '내 프로필' : '프로필')
+  const name = user?.nickname || '피노리 사용자'
+  const followers = user?.followerCount || 0
+  const following = user?.followingCount || 0
+  const edgeToEdge = width <= 640
+  return <Screen maxWidth={760} contentStyle={v.page} refreshing={loading} onRefresh={() => setRevision(value => value + 1)}>
+    <View style={v.topbar}>
+      {!own && <IconButton label="사람 목록으로 돌아가기" onPress={() => router.push(from && /^\/people(?:\?|$)/.test(from) ? from : '/people')} style={{ marginLeft: -10 }}><ChevronLeft size={24} color={p.ink} /></IconButton>}
+      <Text numberOfLines={1} style={v.handle}>{handle}</Text>
+      {own ? <IconButton label="프로필 설정" onPress={() => router.push('/profile/settings')}><Settings size={22} color={p.ink} /></IconButton>
+        : !!user && <ProfileMoreMenu user={user} blocked={blocked} onUnblock={() => void unblock()} />}
+    </View>
+    {loading && !user && <Text style={v.state}>프로필을 불러오는 중입니다.</Text>}
+    {!!loadError && <View style={{ gap: 10 }}><Notice error>{loadError}</Notice><Button title="다시 시도" variant="secondary" disabled={loading} onPress={() => setRevision(value => value + 1)} /></View>}
+    {!loading && !loadError && !user && <Empty title="프로필을 찾을 수 없습니다." description="탈퇴했거나 아직 프로필을 완성하지 않은 사용자입니다." />}
+    {user && <View accessibilityLabel="프로필" style={v.header}>
+      <View style={v.profileSummary}>
+        {user.photoURL ? <RemoteImage uri={user.photoURL} accessibilityLabel={`${name} 프로필 사진`} style={v.avatar} />
+          : <View style={[v.avatar, v.initial]}><Text style={v.initialText}>{name.slice(0, 1) || 'S'}</Text></View>}
+        <View style={v.stats}>
+          <View accessibilityLabel={pinCount === null ? '핀 수를 볼 수 없어요' : `핀 ${pinCount}개`} style={v.stat}><Text style={v.statNumber}>{pinCount ?? '–'}</Text><Text style={v.statLabel}>핀</Text></View>
+          <Pressable accessibilityRole="button" accessibilityLabel={`팔로워 ${followers}명 보기`} onPress={() => setList('followers')} style={({ pressed }) => [v.stat, pressed && { backgroundColor: p.surface }]}><Text style={v.statNumber}>{followers}</Text><Text style={v.statLabel}>팔로워</Text></Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel={`팔로잉 ${following}명 보기`} onPress={() => setList('following')} style={({ pressed }) => [v.stat, pressed && { backgroundColor: p.surface }]}><Text style={v.statNumber}>{following}</Text><Text style={v.statLabel}>팔로잉</Text></Pressable>
         </View>
-        <View style={v.about}><Text style={v.sectionLabel}>소개</Text><Txt>{user.bio || '아직 소개글이 없습니다.'}</Txt></View>
-        {!!user.isPrivate && <View style={v.privacyNote}><Lock size={15} color={p.muted} /><Text style={[s.muted, { flex: 1 }]}>{own ? '비공개 계정 · 새 팔로우 요청은 설정에서 승인할 수 있습니다.' : '비공개 계정 · 팔로우 요청을 승인받아야 합니다.'}</Text></View>}
-        {own ? <Button title="프로필 편집" variant="secondary" onPress={() => router.push('/profile/settings')} /> : <>
-          <View style={v.actions}><View style={{ flex: 1 }}><Button title={details?.followed ? '팔로잉' : details?.requested ? '요청 취소' : user.isPrivate ? '팔로우 요청' : '팔로우'}
-            variant={details?.followed || details?.requested ? 'secondary' : 'primary'} loading={action === 'follow'} disabled={!!action || loading || !profile} onPress={follow} /></View>
-            <View style={{ flex: 1 }}><Button title="채팅" variant="secondary" loading={action === 'chat'} disabled={!!action || !profile} onPress={chat} /></View></View>
-          <View style={v.reportRow}><ReportButton target={{ kind: 'user', targetId: user.uid, label: user.nickname }} compact />
-            {!!user.photoURL && <ReportButton target={{ kind: 'photo', sourceKind: 'user', targetId: user.uid, photoUrl: user.photoURL, label: `${user.nickname} 프로필 사진` }} label="사진 신고" compact />}</View>
+      </View>
+      <View style={v.identity}>
+        <Text accessibilityRole="header" style={v.name}>{name}</Text>
+        <Text selectable style={[v.bio, !user.bio && { color: p.muted }]}>{user.bio || '아직 소개글이 없습니다.'}</Text>
+        {!!user.isPrivate && <View style={v.profilePrivacy}><Lock size={14} color={p.muted} style={{ marginTop: 2 }} /><Text style={v.privacyText}>{own ? '비공개 계정 · 새 팔로우 요청은 설정에서 승인할 수 있습니다.' : '비공개 계정 · 팔로우 요청을 승인받아야 합니다.'}</Text></View>}
+      </View>
+      <View style={v.actions}>
+        {own ? <Button title="프로필 편집" variant="secondary" style={v.action} onPress={() => router.push('/profile/settings')} /> : blocked ? <Button title={action === 'unblock' ? '해제 중…' : '차단 해제'} variant="secondary" style={v.action} icon={<Ban size={17} color={p.ink} />} disabled={!!action} onPress={() => void unblock()} /> : <>
+          <Button title={action === 'follow' ? '처리 중…' : followed ? '팔로잉' : requested ? '요청 취소' : user.isPrivate ? '팔로우 요청' : '팔로우'} style={v.action}
+            icon={<FollowIcon size={17} color={followed || requested ? p.ink : p.paper} />}
+            variant={followed || requested ? 'secondary' : 'primary'} disabled={!!action || loading || !!loadError || !profile} onPress={follow} />
+          <Button title={action === 'chat' ? '채팅 여는 중…' : '채팅'} variant="secondary" style={v.action} icon={<MessageCircle size={17} color={p.ink} />} disabled={!!action || !profile} onPress={chat} />
         </>}
       </View>
-      {own && <View style={s.card}><Text style={v.sectionLabel}>내 활동</Text>
-        <Row title="좋아요" subtitle="좋아요한 핀 모아보기" onPress={() => router.push('/profile/likes')} right={<Heart size={22} color={p.coral} />} />
-        <Row title="내 기록" subtitle="장소와 날짜로 돌아보는 나의 하루" onPress={() => router.push('/my')} />
-        <Row title="내 그룹" subtitle="함께 쌓아가는 장소 기록" onPress={() => router.push('/groups')} />
-      </View>}
-      <ProfileAlbum ownerUid={user.uid} own={own} revision={revision} />
-      {list && <FollowList user={user} kind={list} onClose={() => setList(null)} />}
+    </View>}
+    {!!actionError && <Notice error>{actionError}</Notice>}
+    {user && blocked && <View style={v.stateBox}><Ban color={p.muted} size={26} /><Text style={v.stateText}>차단한 사용자입니다.</Text><Text style={v.stateSmall}>차단을 해제하면 이 사용자의 핀과 댓글, 메시지를 다시 볼 수 있어요.</Text></View>}
+    {user && !blocked && <>
+      {own ? <View accessibilityRole="tablist" accessibilityLabel="프로필 핀 보기" style={v.tabs}>
+        <ProfileTab label="핀" icon={Grid3X3} selected={tab === 'pins'} onPress={() => router.setParams({ tab: '' })} />
+        <ProfileTab label="좋아요" icon={Heart} selected={tab === 'likes'} onPress={() => router.setParams({ tab: 'likes' })} />
+      </View> : <View style={v.tabs}><ProfileTab label="핀" icon={Grid3X3} selected /></View>}
+      <View style={[v.grid, edgeToEdge && { marginHorizontal: -16 }]}>
+        {tab === 'likes' ? <LikedPinAlbum state={likedState} /> : <ProfilePinAlbum state={albumState} own={own} />}
+      </View>
     </>}
+    {user && list && <FollowList user={user} kind={list} onClose={() => setList(null)} />}
   </Screen>
 }
 
-function ProfileAlbum({ ownerUid, own, revision }: { ownerUid: string; own: boolean; revision: number }) {
+function ProfileTab({ label, icon: Icon, selected, onPress }: { label: string; icon: typeof Grid3X3; selected: boolean; onPress?: () => void }) {
+  const color = selected ? p.ink : p.light
+  return <Pressable accessibilityRole={onPress ? 'tab' : 'header'} accessibilityState={{ selected }} disabled={!onPress} onPress={onPress} style={[v.tab, selected && v.tabActive]}>
+    <Icon size={18} color={color} /><Text style={[v.tabText, { color }, selected && { fontWeight: '700' }]}>{label}</Text>
+  </Pressable>
+}
+
+// Reports live in an overflow menu so they stay reachable without competing with follow and chat.
+function ProfileMoreMenu({ user, blocked, onUnblock }: { user: DaymarkUser; blocked: boolean; onUnblock: () => void }) {
+  const { width } = useWindowDimensions()
+  const buttonRef = useRef<View>(null)
+  const [anchor, setAnchor] = useState<{ top: number; right: number } | null>(null)
+  const [report, setReport] = useState<ReportTarget | null>(null)
+  const [blocking, setBlocking] = useState(false)
+  const name = user.nickname || '피노리 사용자'
+  const items: { label: string; target: ReportTarget }[] = [
+    { label: '사용자 신고', target: { kind: 'user', targetId: user.uid, label: name } },
+    ...(user.photoURL ? [{ label: '프로필 사진 신고', target: { kind: 'photo', sourceKind: 'user', targetId: user.uid, photoUrl: user.photoURL, label: `${name} 프로필 사진` } as ReportTarget }] : []),
+  ]
+  function open() {
+    buttonRef.current?.measureInWindow((x, y, w, h) => setAnchor({ top: y + h + 4, right: Math.max(8, width - (x + w)) }))
+  }
+  return <>
+    <View ref={buttonRef} collapsable={false}><IconButton label="더보기" selected={!!anchor} onPress={open}><Ellipsis size={22} color={p.ink} /></IconButton></View>
+    <Modal visible={!!anchor} transparent animationType="fade" onRequestClose={() => setAnchor(null)}>
+      <Pressable accessibilityLabel="메뉴 닫기" style={StyleSheet.absoluteFill} onPress={() => setAnchor(null)} />
+      {anchor && <View accessibilityLabel={`${name} 더보기`} style={[v.menu, elevation.dialog, anchor]}>
+        {items.map(item => <Pressable key={item.label} accessibilityRole="menuitem" onPress={() => { setAnchor(null); setReport(item.target) }} style={({ pressed }) => [v.menuItem, pressed && { backgroundColor: p.surface }]}>
+          <Flag size={16} color={p.ink} /><Text style={v.menuText}>{item.label}</Text>
+        </Pressable>)}
+        <Pressable accessibilityRole="menuitem" onPress={() => { setAnchor(null); if (blocked) onUnblock(); else setBlocking(true) }} style={({ pressed }) => [v.menuItem, pressed && { backgroundColor: p.errorSoft }]}>
+          <Ban size={16} color={p.danger} /><Text style={[v.menuText, { color: p.danger }]}>{blocked ? '차단 해제' : '사용자 차단'}</Text>
+        </Pressable>
+      </View>}
+    </Modal>
+    {report && <ReportDialog target={report} onClose={() => setReport(null)} />}
+    {blocking && <BlockUserDialog target={{ uid: user.uid, nickname: name, photoURL: user.photoURL }} onClose={() => setBlocking(false)} />}
+  </>
+}
+
+// Settings list of blocked members; each row unblocks in place.
+function BlockedUsersSection() {
   const { currentUser } = useAuth()
-  const viewerUid = currentUser?.uid
-  const [album, setAlbum] = useState<Awaited<ReturnType<typeof getProfilePosts>> | null>(null)
-  const [loading, setLoading] = useState(true)
+  const { users, error: loadError } = useBlockedUsers()
+  const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
-  const [layout, setLayout] = useState<'grid' | 'list'>('grid')
-  const [term, setTerm] = useState('')
-  const [localRevision, setLocalRevision] = useState(0)
-
-  useEffect(() => {
-    let active = true
-    setAlbum(null); setLoading(true); setError('')
-    getProfilePosts(ownerUid, viewerUid).then(result => { if (active) setAlbum(result) })
-      .catch(err => { if (active) setError(authErrorMessage(err, '핀을 불러오지 못했습니다.')) })
-      .finally(() => { if (active) setLoading(false) })
-    return () => { active = false }
-  }, [ownerUid, viewerUid, revision, localRevision])
-  const query = term.trim().toLocaleLowerCase()
-  const posts = (album?.posts || []).filter(post => !query || `${post.title} ${post.content} ${post.placeName} ${post.dateKey}`.toLocaleLowerCase().includes(query))
-
-  return <View style={{ gap: 15 }}>
-    <View style={s.between}><View style={s.row}><MapPin size={20} color={p.primary} /><H>{own ? '내 핀' : '핀'}</H>{album && album.access !== 'locked' && <Text style={v.count}>{album.posts.length}</Text>}</View>
-      <View style={v.actions}><Pressable accessibilityRole="button" accessibilityLabel="사진 앨범 보기" accessibilityState={{ selected: layout === 'grid' }} onPress={() => setLayout('grid')} style={v.iconButton}><Grid3X3 color={layout === 'grid' ? p.primary : p.muted} size={20} /></Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel="기록 목록 보기" accessibilityState={{ selected: layout === 'list' }} onPress={() => setLayout('list')} style={v.iconButton}><List color={layout === 'list' ? p.primary : p.muted} size={20} /></Pressable></View>
-    </View>
-    {loading && <ActivityIndicator color={p.primary} />}
-    {!!error && <><Notice error>{error}</Notice><Button title="다시 시도" variant="secondary" onPress={() => setLocalRevision(value => value + 1)} /></>}
-    {album?.access === 'locked' && <View style={v.locked}><Lock color={p.muted} size={30} /><Empty title="비공개 계정입니다" description="팔로우 요청이 승인되면 공개된 핀을 볼 수 있어요." /></View>}
-    {!loading && album && album.access !== 'locked' && <>
-      {album.posts.length > 0 && <Field value={term} onChangeText={setTerm} placeholder="장소, 기록 또는 날짜 검색" accessibilityLabel="핀 검색" />}
-      {!posts.length && <Empty title={query ? '검색 결과가 없습니다' : own ? '아직 남긴 핀이 없습니다' : '볼 수 있는 핀이 없습니다'} description={own && !query ? '지도에서 첫 장소를 기록해 보세요.' : undefined} />}
-      {layout === 'grid' ? <View style={v.grid}>{posts.map(post => <Pressable key={post.id} style={v.tile} accessibilityRole="button" accessibilityLabel={`${post.title}, ${post.placeName}, ${post.dateKey}`} onPress={() => router.push(`/posts/${post.id}`)}>
-        {(post.photoThumbnailUrls?.[0] || post.photoUrls?.[0]) ? <Image source={{ uri: post.photoThumbnailUrls?.[0] || post.photoUrls[0] }} style={v.tileImage} /> : <View style={[v.tileImage, v.textTile, { backgroundColor: `${post.pinColor || p.primary}22` }]}><MapPin color={post.pinColor || p.primary} size={24} /><Text style={v.tileText} numberOfLines={3}>{post.title}</Text></View>}
-        <View style={v.tileCaption}><Text style={v.tileTitle} numberOfLines={1}>{post.placeName || post.title}</Text><Text style={v.tileDate}>{post.dateKey}</Text></View>
-        {own && post.visibility === 'private' && <View style={v.visibility}><Lock size={12} color="white" /></View>}
-      </Pressable>)}</View> : posts.map(post => <PostCard key={post.id} post={post} />)}
-    </>}
+  async function unblock(uid: string) {
+    if (!currentUser || busy) return
+    setBusy(uid); setError('')
+    try { await unblockUser(currentUser.uid, uid) } catch (err) { setError(authErrorMessage(err, '차단을 해제하지 못했습니다.')) } finally { setBusy('') }
+  }
+  return <View style={v.settingsSection}>
+    <Text accessibilityRole="header" style={[v.settingsHeading, { marginBottom: 10 }]}>차단한 사용자 {users.length ? users.length : ''}</Text>
+    {!!(error || loadError) && <Notice error>{error || loadError}</Notice>}
+    {!users.length ? <Text style={[s.muted, { paddingVertical: 12 }]}>차단한 사용자가 없습니다. 프로필이나 기록, 댓글, 채팅 메뉴에서 차단할 수 있어요.</Text>
+      : users.map((user, index) => <View key={user.uid} style={[v.listRow, index > 0 && v.policyDivider]}>
+        <Pressable style={v.personLink} accessibilityRole="link" accessibilityLabel={`${user.nickname} 프로필`} onPress={() => router.push(`/people/${user.uid}`)}>
+          <Avatar uri={user.photoURL} name={user.nickname} size={40} />
+          <View style={{ flex: 1, minWidth: 0, gap: 3 }}><Text numberOfLines={1} style={v.listName}>{user.nickname}</Text>{user.createdAt ? <Text style={s.muted}>{formatTimestamp(user.createdAt)} 차단</Text> : null}</View>
+        </Pressable>
+        <Button title={busy === user.uid ? '해제 중' : '차단 해제'} variant="secondary" style={v.rowButton} disabled={!!busy} onPress={() => void unblock(user.uid)} />
+      </View>)}
   </View>
 }
+
+function ProfilePinAlbum({ state, own }: { state: ProfileAlbumState; own: boolean }) {
+  const { album, loading, error, retry } = state
+  return <View accessibilityLabel={own ? '내 핀' : '핀'}>
+    {loading && <Text style={v.state}>핀을 불러오는 중입니다.</Text>}
+    {!!error && <View style={v.stateBox}><Text style={v.stateText}>{error}</Text><Button title="다시 시도" variant="secondary" onPress={retry} /></View>}
+    {!loading && album?.access === 'locked' && <View style={v.stateBox}><Lock color={p.muted} size={26} /><Text style={v.stateText}>비공개 계정입니다.</Text><Text style={v.stateSmall}>팔로우 요청이 승인되면 공개된 핀을 볼 수 있어요.</Text></View>}
+    {!loading && album && album.access !== 'locked' && (album.posts.length ? <PinAlbumGrid posts={album.posts} showVisibility={own} />
+      : <View style={v.stateBox}><MapPin size={28} color={p.muted} /><Text style={v.stateText}>{own ? '아직 남긴 핀이 없습니다.' : '볼 수 있는 핀이 없습니다.'}</Text></View>)}
+  </View>
+}
+
+function LikedPinAlbum({ state }: { state: LikedPostsState }) {
+  const { posts, loading, error, retry } = state
+  return <View accessibilityLabel="좋아요한 핀">
+    {loading && <Text style={v.state}>좋아요한 핀을 불러오는 중이에요.</Text>}
+    {!!error && <View style={v.stateBox}><Text style={v.stateText}>{error}</Text><Button title="다시 시도" variant="secondary" icon={<RefreshCw size={17} color={p.ink} />} onPress={retry} /></View>}
+    {!loading && !error && (posts.length ? <PinAlbumGrid posts={posts} />
+      : <View style={v.stateBox}><Heart size={28} color={p.muted} /><Text style={v.stateText}>아직 좋아요한 핀이 없어요.</Text>
+        <Text style={v.stateSmall}>피드나 지도에서 마음에 드는 핀에 좋아요를 눌러보세요.</Text>
+        <Button title="피드 둘러보기" variant="secondary" onPress={() => router.push('/feed')} style={{ marginTop: 8 }} />
+      </View>)}
+  </View>
+}
+
+function SettingsStats({ user, onOpen }: { user: Pick<DaymarkUser, 'followerCount' | 'followingCount'>; onOpen: (kind: FollowListKind) => void }) {
+  return <View style={v.settingsStats}>{(['followers', 'following'] as const).map(kind => {
+    const label = kind === 'followers' ? '팔로워' : '팔로잉'
+    const count = (kind === 'followers' ? user.followerCount : user.followingCount) || 0
+    return <Pressable key={kind} accessibilityRole="button" accessibilityLabel={`${label} ${count}명`} onPress={() => onOpen(kind)} style={({ pressed }) => [v.settingsStat, pressed && { opacity: 0.6 }]}>
+      <Text style={v.settingsStatLabel}>{label}</Text><Text style={v.settingsStatNumber}>{count}</Text>
+    </Pressable>
+  })}</View>
+}
+
+function RecordsLink({ style }: { style?: StyleProp<ViewStyle> }) {
+  return <Pressable accessibilityRole="link" onPress={() => router.push('/my')} style={({ pressed }) => [v.recordsLink, pressed && { backgroundColor: p.coralSoft }, style]}><BookOpen size={17} color={p.coral} /><Text style={v.recordsText}>내 기록</Text><ChevronRight size={16} color={p.coral} /></Pressable>
+}
+
 
 function FollowList({ user, kind, manage = false, onClose, onChanged }: {
   user: DaymarkUser; kind: FollowListKind; manage?: boolean; onClose: () => void; onChanged?: () => void
 }) {
+  const { width } = useWindowDimensions()
   const [people, setPeople] = useState<FollowEdge[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -182,7 +294,7 @@ function FollowList({ user, kind, manage = false, onClose, onChanged }: {
     setLoading(true); setError('')
     const request = kind === 'followers' ? getFollowers(user.uid) : getFollowing(user.uid)
     request.then(next => { if (active) setPeople(sortedPeople(next)) })
-      .catch(err => { if (active) setError(authErrorMessage(err)) })
+      .catch(err => { if (active) setError(authErrorMessage(err, '목록을 불러오지 못했습니다.')) })
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
   }, [user.uid, kind, revision])
@@ -194,26 +306,31 @@ function FollowList({ user, kind, manage = false, onClose, onChanged }: {
       if (kind === 'followers') await removeFollower(user.uid, person.uid)
       else await unfollowUser(user.uid, person.uid)
       setPeople(previous => previous.filter(item => item.uid !== person.uid)); onChanged?.()
-    } catch (err) { setError(authErrorMessage(err)) }
+    } catch (err) { setError(authErrorMessage(err, '팔로우 관계를 변경하지 못했습니다.')) }
     finally { lock.current = false; setBusy('') }
   }
-  return <Modal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-    <Screen title={`${user.nickname} · ${title}`} right={<Pressable style={v.iconButton} accessibilityRole="button" accessibilityLabel="목록 닫기" onPress={onClose}><X color={p.ink} size={23} /></Pressable>}>
-      {loading && <ActivityIndicator color={p.primary} />}
-      {!!error && <><Notice error>{error}</Notice><Button title="다시 시도" variant="secondary" onPress={() => setRevision(value => value + 1)} /></>}
-      {!loading && !people.length && <Empty title={`아직 ${title}가 없습니다`} />}
-      {people.map(person => <View key={person.uid} style={v.personRow}>
-        <Pressable style={v.personLink} accessibilityRole="button" accessibilityLabel={`${person.nickname} 프로필`} onPress={() => { onClose(); router.push(`/people/${person.uid}`) }}>
-          <Avatar uri={person.photoURL} name={person.nickname} /><View style={{ flex: 1 }}><Txt>{person.nickname}</Txt><Text style={s.muted}>{kind === 'followers' ? '팔로워' : '팔로잉'}</Text></View>
+  return <Dialog visible title={title} onClose={onClose} busy={!!busy}>
+    {!manage && <Text style={[v.toolbarText, { marginTop: -10 }]}>{user.nickname}</Text>}
+    {!!error && <View style={{ gap: 10 }}><Notice error>{error}</Notice><Button title="다시 시도" variant="secondary" onPress={() => setRevision(value => value + 1)} /></View>}
+    {loading && <Text style={v.followEmpty}>목록을 불러오는 중입니다.</Text>}
+    {!loading && !error && !people.length && <Text style={v.followEmpty}>{manage ? `아직 ${title} 목록이 없습니다.` : `아직 ${title}가 없습니다.`}</Text>}
+    {!loading && people.length > 0 && <View>{people.map(person => manage
+      ? <View key={person.uid} style={[v.followRow, width <= 620 && { flexWrap: 'wrap' }]}>
+        <Pressable style={v.personLink} accessibilityRole="link" accessibilityLabel={`${person.nickname} 프로필`} onPress={() => { onClose(); router.push(`/people/${person.uid}`) }}>
+          <Avatar uri={person.photoURL} name={person.nickname} size={48} /><View style={{ flex: 1, minWidth: 0, gap: 5 }}><Text numberOfLines={1} style={v.personName}>{person.nickname}</Text><Text numberOfLines={1} style={s.muted}>{kind === 'followers' ? '나를 팔로우 중' : '내가 팔로우 중'}</Text></View>
         </Pressable>
-        {manage && <Button title={kind === 'followers' ? '제거' : '취소'} variant="secondary" disabled={!!busy} loading={busy === person.uid} onPress={() => remove(person)} />}
-      </View>)}
-    </Screen>
-  </Modal>
+        <Button title={busy === person.uid ? '처리 중' : kind === 'followers' ? '제거' : '팔로잉 취소'} variant="secondary" style={width <= 620 ? { width: '100%' } : { minWidth: 112 }} icon={<UserMinus size={17} color={p.ink} />} disabled={!!busy} onPress={() => remove(person)} />
+      </View>
+      : <Pressable key={person.uid} accessibilityRole="link" accessibilityLabel={`${person.nickname || '사용자'} 프로필 보기`} onPress={() => { onClose(); router.push(`/people/${person.uid}`) }} style={({ pressed }) => [v.summary, pressed && { backgroundColor: p.surface }]}>
+        <Avatar uri={person.photoURL} name={person.nickname} size={48} /><Text numberOfLines={2} style={[v.personName, { flex: 1, fontSize: 16 }]}>{person.nickname || '피노리 사용자'}</Text>
+      </Pressable>)}</View>}
+  </Dialog>
 }
 
 export function ProfileSettingsScreen() {
   const { currentUser, profile, refreshProfile } = useAuth()
+  const { width } = useWindowDimensions()
+  const narrow = width <= 620
   const [username, setUsername] = useState(profile?.username || '')
   const [nickname, setNickname] = useState(profile?.nickname || '')
   const [bio, setBio] = useState(profile?.bio || '')
@@ -250,7 +367,7 @@ export function ProfileSettingsScreen() {
     const revision = ++requestRevision.current
     setRequestsLoading(true); setRequestsError('')
     try { const result = await getIncomingFollowRequests(uid); if (revision === requestRevision.current) setRequests(sortedPeople(result)) }
-    catch (err) { if (revision === requestRevision.current) setRequestsError(authErrorMessage(err)) }
+    catch (err) { if (revision === requestRevision.current) setRequestsError(authErrorMessage(err, '팔로우 요청을 불러오지 못했습니다.')) }
     finally { if (revision === requestRevision.current) setRequestsLoading(false) }
   }, [uid])
   useEffect(() => { void loadRequests(); return () => { requestRevision.current++ } }, [loadRequests])
@@ -267,30 +384,32 @@ export function ProfileSettingsScreen() {
       await updateUserPrivacy(currentUser.uid, isPrivate)
       await refreshProfile()
       setPhoto(null); setRemovePhoto(false); setMessage('프로필을 저장했습니다.')
-    } catch (err) { setError(authErrorMessage(err, '프로필을 저장하지 못했습니다.')) }
+    } catch (err) { setError(authErrorMessage(err, '프로필 저장에 실패했습니다.')) }
     finally { actionLock.current = false; setBusy('') }
   }
 
   async function choosePhoto() {
-    try { const result = await pickProfilePhoto(); if (result) { setEditingPhoto(result); setMessage('') } }
+    try { const result = await pickProfilePhoto(); if (result) { setEditingPhoto(result); setMessage(''); setError('') } }
     catch (err) { setError(authErrorMessage(err)) }
   }
 
   async function respond(request: FollowRequest, accept: boolean) {
     if (!profile || !uid || requestLock.current) return
-    requestLock.current = true; setRequestAction(request.uid); setRequestsError('')
+    requestLock.current = true; setRequestAction(request.uid); setRequestsError(''); setMessage('')
     try {
       if (accept) await acceptFollowRequest(profile, request)
       else await declineFollowRequest(uid, request.uid)
+      setRequests(previous => previous.filter(item => item.uid !== request.uid))
+      setMessage(accept ? '팔로우 요청을 승인했습니다.' : '팔로우 요청을 거절했습니다.')
       await Promise.all([loadRequests(), refreshProfile()])
-    } catch (err) { setRequestsError(authErrorMessage(err)) }
+    } catch (err) { setRequestsError(authErrorMessage(err, accept ? '팔로우 요청을 승인하지 못했습니다.' : '팔로우 요청을 거절하지 못했습니다.')) }
     finally { requestLock.current = false; setRequestAction('') }
   }
 
   async function signOut() {
     if (actionLock.current) return
     actionLock.current = true; setBusy('logout'); setError('')
-    try { await logout(); router.replace('/') }
+    try { await logout(); router.replace('/login') }
     catch (err) { setError(authErrorMessage(err)) }
     finally { actionLock.current = false; setBusy('') }
   }
@@ -301,68 +420,144 @@ export function ProfileSettingsScreen() {
     try {
       await reauthenticateAccount(currentUser, deletePassword)
       await deleteAccount(currentUser)
-      setDeletePassword(''); setDeleteOpen(false); router.replace('/')
+      setDeletePassword(''); setDeleteOpen(false); router.replace('/login')
     } catch (err) { setDeleteError(authErrorMessage(err, '계정 탈퇴에 실패했습니다.')) }
     finally { actionLock.current = false; setBusy('') }
   }
 
   if (!currentUser || !profile) return <Screen title="프로필 설정" back><Empty title="프로필을 불러오는 중입니다" /><Button title="다시 불러오기" onPress={() => { void refreshProfile().catch(err => setError(authErrorMessage(err))) }} />{!!error && <Notice error>{error}</Notice>}</Screen>
 
-  return <Screen title="프로필 설정" back>
-    <View style={v.settingsPhoto}><Pressable accessibilityRole="button" accessibilityLabel="프로필 사진 변경 및 자르기" onPress={choosePhoto} disabled={!!busy}>
-      <Avatar uri={removePhoto ? undefined : photo?.uri || profile.photoURL} name={nickname} size={100} /><View style={v.camera}><Camera size={18} color="white" /></View>
-    </Pressable><View style={{ flex: 1, gap: 6 }}><H>{profile.nickname}</H><Text style={s.muted}>{currentUser.email}</Text><Pressable accessibilityRole="button" onPress={choosePhoto} disabled={!!busy}><Text style={v.link}>프로필 사진 변경 · 자르기</Text></Pressable></View></View>
-    {(photo || (!removePhoto && profile.photoURL)) && <Button title="프로필 사진 제거" variant="secondary" onPress={() => { setPhoto(null); setRemovePhoto(true) }} disabled={!!busy} />}
-    {(photo || (!removePhoto && profile.photoURL)) && <Button title="사진 편집" variant="secondary" onPress={() => setEditingPhoto(photo || { uri: profile.photoURL })} disabled={!!busy} />}
-    <View style={s.card}>
-      <Field label="사용자 이름" value={username} onChangeText={value => setUsername(value.toLowerCase())} autoCapitalize="none" autoCorrect={false} maxLength={USERNAME_MAX_LENGTH} editable={!busy} />
-      <Text style={s.muted}>영어, 숫자, 밑줄(_), 점(.) · 다른 사용자와 중복될 수 없어요.</Text>
-      <Field label="닉네임" value={nickname} onChangeText={setNickname} maxLength={NICKNAME_MAX_LENGTH} editable={!busy} />
-      <Field label="소개글" value={bio} onChangeText={setBio} multiline maxLength={BIO_MAX_LENGTH} placeholder="나를 소개하는 한마디" editable={!busy} />
-      <Text style={s.muted}>{bio.length} / {BIO_MAX_LENGTH}</Text>
-      <Row title="비공개 계정" subtitle="새 팔로우를 승인제로 받기" right={<Switch value={isPrivate} onValueChange={setPrivate} disabled={!!busy} accessibilityLabel="비공개 계정" trackColor={{ false: p.line, true: p.primary }} />} />
-      {!!error && <Notice error>{error}</Notice>}{!!message && <Notice>{message}</Notice>}
-      <Button title="변경사항 저장" onPress={save} loading={busy === 'save'} disabled={!!busy} />
+  const shownPhoto = removePhoto ? undefined : photo?.uri || profile.photoURL || undefined
+  const hasPhoto = !!(photo || (!removePhoto && profile.photoURL))
+  return <Screen maxWidth={808}>
+    <Pressable accessibilityRole="link" style={[s.row, v.back]} onPress={() => router.push('/profile')}><ArrowLeft size={18} color={p.muted} /><Text style={v.toolbarText}>내 프로필</Text></Pressable>
+    <PageHeading eyebrow="Settings" title="프로필 설정" description="내 계정과 표시 이름을 관리합니다." />
+    <View style={[v.panel, narrow && { gap: 8 }]}>
+      <View style={[s.row, { gap: narrow ? 14 : 16 }]}>
+        <Avatar uri={shownPhoto} name={nickname} size={62} />
+        <View style={v.panelIdentity}>
+          <Text style={v.panelName}>{profile.nickname || '피노리 사용자'}</Text>
+          {!!profile.username && <Text style={v.panelHandle}>@{profile.username}</Text>}
+          <SettingsStats user={profile} onOpen={setList} />
+          {!!profile.bio && <Text style={v.panelBio}>{profile.bio}</Text>}
+          {!!profile.isPrivate && <View style={v.privateBadge}><Lock size={13} color={p.ink} /><Text style={{ color: p.ink, fontSize: 12, fontWeight: '700' }}>비공개</Text></View>}
+        </View>
+        {!narrow && <RecordsLink />}
+      </View>
+      {narrow && <RecordsLink style={{ marginLeft: 76, alignSelf: 'flex-start' }} />}
     </View>
-    <View style={s.card}><PinThemeEditor /></View>
-    <View style={s.card}><H>팔로우 관리</H>
-      <Row title="팔로워" subtitle={`${profile.followerCount || 0}명`} onPress={() => setList('followers')} />
-      <Row title="팔로잉" subtitle={`${profile.followingCount || 0}명`} onPress={() => setList('following')} />
-      <Text style={v.sectionLabel}>팔로우 요청 {requests.length ? `· ${requests.length}` : ''}</Text>
-      {requestsLoading && <ActivityIndicator color={p.primary} />}
-      {!!requestsError && <><Notice error>{requestsError}</Notice><Button title="다시 시도" variant="secondary" onPress={loadRequests} /></>}
-      {!requestsLoading && !requests.length && <Text style={s.muted}>대기 중인 팔로우 요청이 없습니다.</Text>}
-      {requests.map(request => <View key={request.uid} style={v.requestCard}>
-        <Pressable style={v.personLink} accessibilityRole="button" onPress={() => router.push(`/people/${request.uid}`)}><Avatar uri={request.photoURL} name={request.nickname} /><View><Txt>{request.nickname}</Txt><Text style={s.muted}>승인 대기 중</Text></View></Pressable>
-        <View style={v.actions}><Button title="승인" onPress={() => respond(request, true)} disabled={!!requestAction} loading={requestAction === request.uid} /><Button title="거절" variant="secondary" onPress={() => respond(request, false)} disabled={!!requestAction} /></View>
-      </View>)}
+    {(profile.isPrivate || requests.length > 0 || requestsLoading) && <View style={v.requestPanel}>
+      <View style={s.between}><View style={{ gap: 4 }}><Text style={v.requestLabel}>팔로우 요청</Text><Text style={v.requestCount}>{requests.length}</Text></View>
+        <Button title="새로고침" variant="secondary" disabled={requestsLoading} onPress={() => void loadRequests()} /></View>
+      {!!requestsError && <Notice error>{requestsError}</Notice>}
+      {requestsLoading && <Text style={v.followEmpty}>요청을 불러오는 중입니다.</Text>}
+      {!requestsLoading && !requests.length ? <Text style={v.followEmpty}>대기 중인 요청이 없습니다.</Text> : <View>{requests.map(request => <View key={request.uid} style={[v.followRow, narrow && { flexWrap: 'wrap' }]}>
+        <Pressable style={v.personLink} accessibilityRole="link" accessibilityLabel={`${request.nickname} 프로필`} onPress={() => router.push(`/people/${request.uid}`)}><Avatar uri={request.photoURL} name={request.nickname} size={48} /><View style={{ flex: 1, minWidth: 0, gap: 5 }}><Text numberOfLines={1} style={v.personName}>{request.nickname}</Text><Text style={s.muted}>승인 대기 중</Text></View></Pressable>
+        <View style={[v.requestActions, narrow && { width: '100%' }]}><Button title="승인" style={narrow ? { flex: 1 } : { minWidth: 86 }} icon={<Check size={17} color={p.paper} />} onPress={() => respond(request, true)} disabled={!!requestAction} loading={requestAction === request.uid} /><Button title="거절" variant="secondary" style={narrow ? { flex: 1 } : { minWidth: 86 }} icon={<X size={17} color={p.ink} />} onPress={() => respond(request, false)} disabled={!!requestAction} /></View>
+      </View>)}</View>}
+    </View>}
+    <QuietSurface.Provider value>
+      <View style={v.form}>
+        <View style={[s.row, { flexWrap: 'wrap', gap: 8 }]}>
+          <Pressable accessibilityRole="button" accessibilityLabel="프로필 사진 변경 및 자르기" disabled={!!busy} onPress={choosePhoto} style={({ pressed }) => [v.photoPicker, pressed && { opacity: 0.7 }]}><Camera size={18} color={p.muted} /><Text numberOfLines={1} style={v.photoPickerText}>{photo?.name || '프로필 사진 변경'}</Text></Pressable>
+          {hasPhoto && <Button title="사진 편집" variant="secondary" tone="outline" icon={<Crop size={17} color={p.ink} />} onPress={() => setEditingPhoto(photo || { uri: profile.photoURL })} disabled={!!busy} />}
+          {hasPhoto && <Button title="사진 제거" variant="secondary" tone="outline" icon={<X size={17} color={p.ink} />} onPress={() => { setPhoto(null); setRemovePhoto(true); setMessage('') }} disabled={!!busy} />}
+        </View>
+        <View style={{ gap: 6 }}>
+          <Field label="사용자 이름" icon={<Text style={{ color: p.muted, fontSize: 16, lineHeight: 20 }}>@</Text>} value={username} onChangeText={value => setUsername(value.toLowerCase())} autoCapitalize="none" autoCorrect={false} autoComplete="username" maxLength={USERNAME_MAX_LENGTH} editable={!busy} />
+          <Text style={v.hint}>영어, 숫자, 밑줄(_), 점(.) · 최대 30자 · 다른 사용자와 중복될 수 없어요.</Text>
+        </View>
+        <Field label="닉네임" value={nickname} onChangeText={setNickname} maxLength={NICKNAME_MAX_LENGTH} editable={!busy} />
+        <View style={{ gap: 6 }}>
+          <Field label="소개글" value={bio} onChangeText={setBio} multiline maxLength={BIO_MAX_LENGTH} placeholder="나를 소개하는 한마디" editable={!busy} />
+          <Text style={v.hint}>{bio.length} / {BIO_MAX_LENGTH}</Text>
+        </View>
+        <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: isPrivate, disabled: !!busy }} accessibilityLabel="비공개 계정, 새 팔로우를 승인제로 받기" disabled={!!busy} onPress={() => setPrivate(value => !value)} style={v.privacy}>
+          <View style={[v.checkbox, isPrivate && v.checkboxOn]}>{isPrivate && <Check size={13} color={p.paper} strokeWidth={3} />}</View>
+          <View style={{ flex: 1, gap: 5 }}><View style={[s.row, { gap: 7 }]}><Lock size={17} color={p.ink} /><Text style={{ color: p.ink, fontSize: 15, fontWeight: '700' }}>비공개 계정</Text></View><Text style={s.muted}>새 팔로우를 승인제로 받기</Text></View>
+        </Pressable>
+        <PinThemeEditor />
+        {!!message && <Notice>{message}</Notice>}{!!error && <Notice error>{error}</Notice>}
+        <View style={v.saveActions}><Button title={busy === 'save' ? '저장 중' : '변경사항 저장'} icon={<Save size={17} color={p.paper} />} style={{ minHeight: 46, paddingHorizontal: 24 }} onPress={save} loading={busy === 'save'} disabled={!!busy} /></View>
+      </View>
+    </QuietSurface.Provider>
+    <BlockedUsersSection />
+    <View style={v.settingsSection}><Text accessibilityRole="header" style={[v.settingsHeading, { marginBottom: 10 }]}>고객센터</Text>
+      <Pressable accessibilityRole="link" onPress={() => router.push('/support')} style={({ pressed }) => [v.policyLink, pressed && { opacity: 0.6 }]}><Text style={v.policyText}>문의·신고 내역</Text><ChevronRight size={17} color={p.muted} /></Pressable>
+      <Pressable accessibilityRole="link" accessibilityLabel={`운영자에게 전화하기 ${OPERATOR_PHONE}`} onPress={() => void Linking.openURL(OPERATOR_PHONE_URL).catch(() => {})} style={({ pressed }) => [v.policyLink, v.policyDivider, pressed && { opacity: 0.6 }]}><Text style={v.policyText}>운영자 연락처</Text><Text style={[v.policyText, { color: p.primary, fontWeight: '600' }]}>{OPERATOR_PHONE}</Text></Pressable>
     </View>
-    <View style={s.card}><H>약관 및 정책</H>{policyNavigation.map(item => <Row key={item.id} title={item.title} onPress={() => router.push(`/policies/${item.id}`)} />)}<Row title="오픈소스 라이선스" onPress={() => router.push('/licenses')} /></View>
-    <View style={s.card}><H>계정 관리</H><Button title="로그아웃" variant="secondary" loading={busy === 'logout'} disabled={!!busy} onPress={() => Alert.alert('로그아웃', '스팟잇에서 로그아웃할까요?', [{ text: '취소', style: 'cancel' }, { text: '로그아웃', onPress: () => { void signOut() } }])} />
-      <Pressable accessibilityRole="button" style={v.deleteLink} disabled={!!busy} onPress={() => { setDeleteError(''); setDeletePassword(''); setDeleteOpen(true) }}><Text style={{ color: p.coral, fontSize: 13 }}>계정 탈퇴</Text></Pressable></View>
+    <View style={v.settingsSection}><Text accessibilityRole="header" style={[v.settingsHeading, { marginBottom: 10 }]}>약관 및 정책</Text>
+      {[...policyNavigation.map(item => ({ title: item.title, href: `/policies/${item.id}` as const })), { title: '오픈소스 라이선스', href: '/licenses' as const }].map((item, index) => <Pressable key={item.href} accessibilityRole="link" onPress={() => router.push(item.href)} style={({ pressed }) => [v.policyLink, index > 0 && v.policyDivider, pressed && { opacity: 0.6 }]}>
+        <Text style={v.policyText}>{item.title}</Text><ChevronRight size={17} color={p.muted} />
+      </Pressable>)}
+    </View>
+    <View style={[v.settingsSection, { gap: 12 }]}><Text accessibilityRole="header" style={v.settingsHeading}>계정 관리</Text>
+      <Pressable accessibilityRole="button" disabled={!!busy} onPress={() => Alert.alert('로그아웃', '피노리에서 로그아웃할까요?', [{ text: '취소', style: 'cancel' }, { text: '로그아웃', onPress: () => { void signOut() } }])} style={({ pressed }) => [v.logout, pressed && { opacity: 0.6 }]}>
+        {busy === 'logout' ? <ActivityIndicator size="small" color={p.muted} /> : <LogOut size={18} color={p.muted} />}<Text style={[v.policyText, { flex: 1 }]}>로그아웃</Text><ChevronRight size={17} color={p.muted} />
+      </Pressable>
+      <Pressable accessibilityRole="button" style={v.deleteLink} disabled={!!busy} onPress={() => { setDeleteError(''); setDeletePassword(''); setDeleteOpen(true) }}><Text style={v.deleteText}>계정 탈퇴</Text></Pressable>
+    </View>
     {list && <FollowList user={profile} kind={list} manage onClose={() => setList(null)} onChanged={() => { void refreshProfile().catch(err => setError(authErrorMessage(err))) }} />}
-    <PhotoEditor photo={editingPhoto} square onClose={() => setEditingPhoto(null)} onSave={value => { setPhoto(value); setRemovePhoto(false); setEditingPhoto(null) }} />
-    <Modal visible={deleteOpen} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => { if (!busy) setDeleteOpen(false) }}>
-      <Screen title="계정 탈퇴" right={<Pressable style={v.iconButton} disabled={!!busy} accessibilityRole="button" accessibilityLabel="탈퇴 취소" onPress={() => setDeleteOpen(false)}><X color={p.ink} size={23} /></Pressable>}>
-        <H>계정을 탈퇴할까요?</H><Txt>탈퇴하면 프로필, 팔로우 관계, 내가 작성한 기록, 댓글, 좋아요가 삭제됩니다.</Txt>
-        <Txt>채팅방에 남아 있던 내 메시지는 탈퇴한 사용자 메시지로 익명 처리됩니다.</Txt>
-        <Notice>삭제된 기록은 복구할 수 없습니다. 계정 보호를 위해 본인 인증을 한 번 더 진행합니다.</Notice>
-        {currentUser.providerData.some(provider => provider.providerId === 'password') && <Field label="현재 비밀번호" value={deletePassword} onChangeText={setDeletePassword} secureTextEntry autoComplete="current-password" editable={!busy} />}
-        {!!deleteError && <Notice error>{deleteError}</Notice>}
-        <Button title="본인 인증 후 탈퇴하기" variant="danger" loading={busy === 'delete'} disabled={!!busy} onPress={removeAccount} />
-        <Button title="취소" variant="secondary" disabled={!!busy} onPress={() => setDeleteOpen(false)} />
-      </Screen>
-    </Modal>
+    <PhotoEditor photo={editingPhoto} square onClose={() => setEditingPhoto(null)} onSave={value => { setPhoto(value); setRemovePhoto(false); setEditingPhoto(null); setMessage(''); setError('') }} />
+    <Dialog visible={deleteOpen} title="계정을 탈퇴할까요?" busy={busy === 'delete'} onClose={() => setDeleteOpen(false)}>
+      <View style={{ gap: 8 }}><Text style={v.deleteCopy}>탈퇴하면 프로필, 팔로우 관계, 내가 작성한 기록, 댓글, 좋아요가 삭제됩니다.</Text><Text style={v.deleteCopy}>채팅방에 남아 있던 내 메시지는 탈퇴한 사용자 메시지로 익명 처리됩니다.</Text></View>
+      <Notice>삭제된 기록은 복구할 수 없습니다. 계정 보호를 위해 본인 인증을 한 번 더 진행합니다.</Notice>
+      {currentUser.providerData.some(provider => provider.providerId === 'password') && <Field label="현재 비밀번호" value={deletePassword} onChangeText={setDeletePassword} secureTextEntry autoComplete="current-password" editable={!busy} />}
+      {!!deleteError && <Notice error>{deleteError}</Notice>}
+      <View style={[s.row, { flexWrap: 'wrap', gap: 8 }]}><Button title="취소" variant="secondary" style={{ flex: 1 }} disabled={!!busy} onPress={() => setDeleteOpen(false)} /><Button title={busy === 'delete' ? '탈퇴 처리 중' : '탈퇴하기'} variant="danger" style={{ flex: 1 }} icon={<Trash2 size={17} color={p.paper} />} loading={busy === 'delete'} disabled={!!busy} onPress={removeAccount} /></View>
+    </Dialog>
   </Screen>
 }
 
 const v = StyleSheet.create({
-  iconButton: { padding: 9 }, identity: { flexDirection: 'row', alignItems: 'center', gap: 18 }, identityText: { flex: 1, gap: 4 }, nickname: { color: p.ink, fontSize: 24, fontWeight: '700' }, handle: { color: p.primary, fontSize: 14 },
-  stats: { flexDirection: 'row', alignItems: 'center', marginTop: 9, gap: 17 }, stat: { alignItems: 'center', gap: 1, minWidth: 40 }, statNumber: { color: p.ink, fontSize: 20, fontWeight: '700' }, statDivider: { width: 1, height: 26, backgroundColor: p.line },
-  about: { gap: 8, paddingTop: 10, marginTop: 5, borderTopWidth: 1, borderTopColor: p.line }, sectionLabel: { color: p.ink, fontSize: 14, fontWeight: '700' }, privacyNote: { flexDirection: 'row', gap: 7, alignItems: 'center', paddingTop: 4 }, actions: { flexDirection: 'row', gap: 9, alignItems: 'center' }, reportRow: { flexDirection: 'row', justifyContent: 'flex-end', gap: 12 },
-  count: { fontSize: 15, color: p.primary, fontWeight: '700', backgroundColor: p.primarySoft, paddingHorizontal: 9, paddingVertical: 3, borderRadius: 10 }, locked: { paddingVertical: 26, alignItems: 'center' },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 }, tile: { width: '31.7%', borderRadius: 11, overflow: 'hidden', backgroundColor: p.paper, borderWidth: 1, borderColor: p.line }, tileImage: { width: '100%', aspectRatio: 1 }, textTile: { alignItems: 'center', justifyContent: 'center', padding: 8, gap: 6 }, tileText: { color: p.ink, fontSize: 11, lineHeight: 16, textAlign: 'center' }, tileCaption: { padding: 7, gap: 4 }, tileTitle: { fontSize: 10, fontWeight: '600', color: p.ink }, tileDate: { fontSize: 9, color: p.muted }, visibility: { position: 'absolute', right: 5, top: 5, padding: 5, borderRadius: 10, backgroundColor: '#25282488' },
-  personRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, borderBottomWidth: 1, borderColor: p.line }, personLink: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
-  settingsPhoto: { flexDirection: 'row', alignItems: 'center', gap: 20, marginVertical: 12 }, camera: { position: 'absolute', right: -3, bottom: 1, borderRadius: 18, padding: 8, borderWidth: 3, borderColor: p.bg, backgroundColor: p.primary }, link: { color: p.primary, fontSize: 12, fontWeight: '600' },
-  requestCard: { gap: 12, paddingVertical: 12, borderBottomWidth: 1, borderColor: p.line }, deleteLink: { alignItems: 'center', paddingVertical: 12 },
+  toolbarText: { color: p.muted, fontSize: 14.4 }, back: { gap: 8, minHeight: 44, alignSelf: 'flex-start' },
+  page: { paddingTop: 8, gap: 0 },
+  topbar: { flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 52 },
+  handle: { flex: 1, minWidth: 0, color: p.ink, fontSize: 18, fontWeight: '700' },
+  state: { color: p.muted, fontSize: 14, lineHeight: 25, textAlign: 'center', paddingVertical: 32 },
+  header: { gap: 12, paddingTop: 8, paddingBottom: 16 },
+  profileSummary: { flexDirection: 'row', alignItems: 'center', gap: 24 },
+  avatar: { width: 80, height: 80, borderRadius: 40, backgroundColor: p.surface },
+  initial: { alignItems: 'center', justifyContent: 'center', backgroundColor: p.primary }, initialText: { color: p.paper, fontSize: 30, fontWeight: '900' },
+  stats: { flex: 1, minWidth: 0, flexDirection: 'row' },
+  stat: { flex: 1, minHeight: 52, alignItems: 'center', justifyContent: 'center', gap: 2, borderRadius: 8 },
+  statNumber: { color: p.ink, fontSize: 18, lineHeight: 23, fontWeight: '700' }, statLabel: { color: p.muted, fontSize: 12 },
+  identity: { gap: 2, minWidth: 0 },
+  name: { color: p.ink, fontSize: 15, fontWeight: '700' },
+  bio: { color: p.ink, fontSize: 14, lineHeight: 22 },
+  profilePrivacy: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: 4 }, privacyText: { flex: 1, color: p.muted, fontSize: 12, lineHeight: 18 },
+  actions: { flexDirection: 'row', gap: 8, marginTop: 4 }, action: { flex: 1, minHeight: 44, paddingHorizontal: 12 },
+  tabs: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: p.line },
+  tab: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, minHeight: 44, marginBottom: -1, borderBottomWidth: 2, borderBottomColor: p.transparent },
+  tabActive: { borderBottomColor: p.ink }, tabText: { fontSize: 13, fontWeight: '500' },
+  grid: { marginTop: 3 },
+  settingsStats: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 18 }, settingsStat: { flexDirection: 'row', alignItems: 'center', gap: 5, minHeight: 44 }, settingsStatLabel: { color: p.muted, fontSize: 13.6 }, settingsStatNumber: { color: p.ink, fontSize: 13.6, fontWeight: '700' },
+  menu: { position: 'absolute', minWidth: 180, padding: 6, borderRadius: 10, backgroundColor: p.paper },
+  menuItem: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 44, paddingHorizontal: 12, borderRadius: 6 },
+  menuText: { color: p.ink, fontSize: 14 },
+  stateBox: { paddingVertical: 48, paddingHorizontal: 16, alignItems: 'center', gap: 8 }, stateText: { color: p.muted, fontSize: 15, lineHeight: 24, textAlign: 'center' }, stateSmall: { color: p.muted, fontSize: 13, lineHeight: 20, textAlign: 'center' },
+  followEmpty: { color: p.muted, textAlign: 'center', fontSize: 15, marginTop: 22, marginBottom: 4 },
+  followRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, borderBottomWidth: 1, borderColor: p.line },
+  listRow: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 60, paddingVertical: 10 }, listName: { color: p.ink, fontSize: 15, fontWeight: '600' }, rowButton: { minHeight: 36, paddingVertical: 6, paddingHorizontal: 12 },
+  personLink: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 12 }, personName: { color: p.ink, fontSize: 17, fontWeight: '700' },
+  summary: { flexDirection: 'row', alignItems: 'center', gap: 14, minHeight: 82, paddingVertical: 14, borderRadius: 8 },
+  panel: { flexDirection: 'row', alignItems: 'center', gap: 16, padding: 18 }, panelIdentity: { flex: 1, minWidth: 0 },
+  panelName: { color: p.ink, fontSize: 16, fontWeight: '700', marginTop: 5 }, panelHandle: { color: p.primary, fontSize: 16, marginTop: 5, marginBottom: 8 }, panelBio: { color: p.muted, fontSize: 13.6, lineHeight: 21, marginTop: 5 },
+  privateBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', marginTop: 7, minHeight: 24, paddingHorizontal: 8, borderRadius: 12, backgroundColor: p.coralSoft },
+  recordsLink: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, minHeight: 44, paddingHorizontal: 8, borderRadius: 8 }, recordsText: { color: p.coral, fontSize: 14, fontWeight: '700' },
+  requestPanel: { gap: 12, paddingVertical: 18, borderTopWidth: 1, borderBottomWidth: 1, borderColor: p.line },
+  requestLabel: { color: p.ink, fontSize: 14, fontWeight: '600' }, requestCount: { color: p.ink, fontSize: 25.6, fontWeight: '700' },
+  requestActions: { flexDirection: 'row', gap: 8 },
+  form: { padding: 18, gap: 24 },
+  photoPicker: { flex: 1, minWidth: 180, minHeight: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 12, borderWidth: 1, borderStyle: 'dashed', borderColor: p.line, borderRadius: 8, backgroundColor: p.surface },
+  photoPickerText: { color: p.muted, fontSize: 15, fontWeight: '700', flexShrink: 1 },
+  hint: { color: p.muted, fontSize: 12, lineHeight: 19 },
+  privacy: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 13, borderTopWidth: 1, borderBottomWidth: 1, borderColor: p.line },
+  checkbox: { width: 18, height: 18, borderRadius: 4, borderWidth: 1.5, borderColor: p.muted, alignItems: 'center', justifyContent: 'center', backgroundColor: p.paper }, checkboxOn: { borderColor: p.primary, backgroundColor: p.primary },
+  saveActions: { flexDirection: 'row', justifyContent: 'flex-end', paddingTop: 18, borderTopWidth: 1, borderColor: p.line },
+  settingsSection: { marginTop: 12, paddingTop: 24, borderTopWidth: 1, borderColor: p.line }, settingsHeading: { color: p.muted, fontSize: 13.6, fontWeight: '700' },
+  policyLink: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, minHeight: 48, paddingVertical: 8 }, policyDivider: { borderTopWidth: 1, borderColor: p.line }, policyText: { color: p.ink, fontSize: 14.7 },
+  logout: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 48, paddingVertical: 8 },
+  deleteLink: { alignSelf: 'flex-end', minHeight: 44, padding: 8, justifyContent: 'center' }, deleteText: { color: p.muted, fontSize: 13, textDecorationLine: 'underline' },
+  deleteCopy: { color: p.muted, fontSize: 15, lineHeight: 24 },
 })

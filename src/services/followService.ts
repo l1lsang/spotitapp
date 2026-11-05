@@ -8,10 +8,11 @@ import {
   writeBatch,
 } from 'firebase/firestore'
 import { requireDb } from '../lib/firebase'
-import { invalidateAppReads } from '../lib/readCache'
+import { appReadCache, invalidateAppReads } from '../lib/readCache'
 import type { FollowEdge, FollowRequest } from '../types/follow'
 import type { DaymarkUser } from '../types/user'
 import { createNotification } from './notificationService'
+import { getUsersByIds } from './userService'
 
 type FollowPerson = Pick<DaymarkUser, 'uid' | 'nickname' | 'photoURL' | 'isPrivate'>
 type FollowActionResult = 'followed' | 'requested'
@@ -248,6 +249,11 @@ export async function getFollowingIds(uid: string): Promise<string[]> {
   const snapshot = await getDocs(collection(requireDb(), 'users', uid, 'following'))
 
   return snapshot.docs.map((followDoc) => followDoc.id)
+}
+
+// Current profiles of everyone the viewer follows; follow edges keep only a name snapshot.
+export async function getFollowingProfiles(uid: string): Promise<DaymarkUser[]> {
+  return appReadCache.read(`followingProfiles:${uid}`, async () => getUsersByIds(await getFollowingIds(uid)))
 }
 
 export async function getFollowers(uid: string): Promise<FollowEdge[]> {

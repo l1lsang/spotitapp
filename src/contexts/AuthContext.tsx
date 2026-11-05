@@ -13,11 +13,13 @@ import { upsertUserProfile } from '../services/userService'
 import type { DaymarkUser } from '../types/user'
 import { AuthContext } from './authContextCore'
 import { invalidateAppReads } from '../lib/readCache'
+import { clearRemoteImageCache } from '../components/RemoteImage'
 
 export function AuthProvider({ children }: PropsWithChildren): ReactElement {
   const [currentUser, setCurrentUser] = useState<User | null>(null)
   const [profile, setProfile] = useState<DaymarkUser | null>(null)
   const [profileError, setProfileError] = useState('')
+  const [profileRetry, setProfileRetry] = useState(0)
   const [loading, setLoading] = useState(Boolean(auth) && isFirebaseConfigured)
 
   const refreshProfile = useCallback(async () => {
@@ -31,6 +33,7 @@ export function AuthProvider({ children }: PropsWithChildren): ReactElement {
     if (auth?.currentUser?.uid === user.uid) {
       setProfile(nextProfile)
       setProfileError('')
+      setProfileRetry(value => value + 1)
     }
   }, [])
 
@@ -41,11 +44,13 @@ export function AuthProvider({ children }: PropsWithChildren): ReactElement {
 
     let active = true
     let revision = 0
-    let unsubscribeProfile: (() => void) | undefined
+    let previousUid: string | null | undefined
     const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       invalidateAppReads()
+      // Restoring the same session at launch keeps the photo cache; a sign-out or account switch clears it.
+      if (previousUid && previousUid !== user?.uid) void clearRemoteImageCache()
+      previousUid = user?.uid ?? null
       const currentRevision = ++revision
-      unsubscribeProfile?.()
       setProfile(null)
       setProfileError('')
       setCurrentUser(user)
@@ -62,15 +67,6 @@ export function AuthProvider({ children }: PropsWithChildren): ReactElement {
         if (!active || currentRevision !== revision) return
         setProfile(nextProfile)
         setLoading(false)
-        unsubscribeProfile = onSnapshot(doc(requireDb(), 'users', user.uid), (snapshot) => {
-          if (!active || currentRevision !== revision) return
-          setProfile(snapshot.exists() ? snapshot.data() as DaymarkUser : null)
-          setLoading(false)
-        }, () => {
-          if (!active || currentRevision !== revision) return
-          setProfileError('프로필을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.')
-          setLoading(false)
-        })
       } catch {
         if (!active || currentRevision !== revision) return
         setProfileError('프로필을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.')
@@ -81,9 +77,22 @@ export function AuthProvider({ children }: PropsWithChildren): ReactElement {
       active = false
       revision += 1
       unsubscribeAuth()
-      unsubscribeProfile?.()
     }
   }, [])
+
+  const profileUid = profile?.uid
+  const currentUid = currentUser?.uid
+  useEffect(() => {
+    if (!currentUid || profileUid !== currentUid) return
+    // Attach only after upsert succeeds. A successful retry also restores a
+    // listener that Firestore closed after a permission/network failure.
+    return onSnapshot(doc(requireDb(), 'users', currentUid), snapshot => {
+      setProfile(snapshot.exists() ? snapshot.data() as DaymarkUser : null)
+      setProfileError(snapshot.exists() ? '' : '프로필을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.')
+    }, () => {
+      setProfileError('프로필을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.')
+    })
+  }, [currentUid, profileUid, profileRetry])
 
   const value = useMemo(
     () => ({
@@ -92,6 +101,7 @@ export function AuthProvider({ children }: PropsWithChildren): ReactElement {
       profileError,
       loading,
       firebaseReady: Boolean(auth) && isFirebaseConfigured,
+      accountReady: Boolean(currentUser && profile && profile.uid === currentUser.uid && profile.onboardingComplete !== false && !loading && !profileError),
       refreshProfile,
     }),
     [currentUser, loading, profile, profileError, refreshProfile],

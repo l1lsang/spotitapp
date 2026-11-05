@@ -9,7 +9,9 @@ export interface PinTheme {
 }
 
 export const DEFAULT_POST_PIN_COLOR = '#df7658'
-export const FOLLOWING_PIN_COLOR = '#81905a'
+// Others' pins use violet: no current or legacy personal pin colour is in that hue.
+export const FOLLOWING_PIN_COLOR = '#7b4fc4'
+export const FOLLOWING_PIN_COLOR_ERROR = '팔로잉 핀 색과 같은 색은 쓸 수 없어요. 다른 색을 골라 주세요.'
 export const PIN_THEME_NAME_MAX_LENGTH = 18
 
 export const PIN_COLOR_PALETTE = [
@@ -45,6 +47,7 @@ export function getPinThemeError(theme: PinTheme): string {
   if (!/^[\w-]{1,80}$/.test(theme.id)) return '핀 테마 정보를 확인해 주세요.'
   if (!theme.name.trim() || theme.name.trim().length > PIN_THEME_NAME_MAX_LENGTH) return `테마 이름은 1~${PIN_THEME_NAME_MAX_LENGTH}자로 입력해 주세요.`
   if (!/^#[\da-f]{6}$/i.test(theme.color)) return '핀 색상을 선택해 주세요.'
+  if (theme.color.toLowerCase() === FOLLOWING_PIN_COLOR) return FOLLOWING_PIN_COLOR_ERROR
   return ''
 }
 

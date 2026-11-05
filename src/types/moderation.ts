@@ -1,6 +1,6 @@
-export type CaseKind = 'pin' | 'user' | 'chat' | 'photo' | 'inquiry' | 'auto'
+export type CaseKind = 'pin' | 'user' | 'chat' | 'comment' | 'photo' | 'inquiry' | 'auto'
 export type CaseStatus = 'open' | 'reviewing' | 'resolved' | 'dismissed'
-export const CASE_LABELS: Record<CaseKind, string> = { pin: '핀 신고', user: '유저 신고', chat: '채팅 신고', photo: '사진 신고', inquiry: '문의', auto: '자동 검토' }
+export const CASE_LABELS: Record<CaseKind, string> = { pin: '핀 신고', user: '유저 신고', chat: '채팅 신고', comment: '댓글 신고', photo: '사진 신고', inquiry: '문의', auto: '자동 검토' }
 export const STATUS_LABELS: Record<CaseStatus, string> = { open: '접수', reviewing: '검토 중', resolved: '처리 완료', dismissed: '기각' }
 export const REPORT_REASONS = [
   { id: 'spam', label: '스팸·광고·사기' }, { id: 'sexual', label: '음란·성적 콘텐츠' },
@@ -10,6 +10,8 @@ export const REPORT_REASONS = [
 export type PhotoSourceKind = 'pin' | 'user' | 'chat'
 export type ReportTarget = { targetId: string; label: string; messageId?: string } & (
   | { kind: 'pin' | 'user' | 'chat' }
+  // targetId is the post, messageId the comment; replyId narrows it to one reply.
+  | { kind: 'comment'; messageId: string; replyId?: string }
   | { kind: 'photo'; sourceKind: PhotoSourceKind; photoUrl: string }
 )
 export interface ModerationCase {

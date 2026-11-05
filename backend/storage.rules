@@ -1,0 +1,48 @@
+rules_version = '2';
+// Shared paths for the web client and the Expo app. Uploads precede the
+// corresponding post/message document, so owners may read their staged files.
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() { return request.auth != null; }
+    function owner(uid) { return signedIn() && request.auth.uid == uid; }
+    function imageWithin(maxBytes) {
+      return request.resource != null && request.resource.size > 0
+        && request.resource.size <= maxBytes
+        && request.resource.contentType.matches('image/(jpeg|png|webp|gif)');
+    }
+    function completedAccount() {
+      return signedIn()
+        && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.get('onboardingComplete', true) != false
+        && (!firestore.exists(/databases/(default)/documents/moderationUsers/$(request.auth.uid))
+          || firestore.get(/databases/(default)/documents/moderationUsers/$(request.auth.uid)).data.get('suspended', false) != true);
+    }
+    function canReadPost(uid, postId) {
+      let post = firestore.get(/databases/(default)/documents/posts/$(postId)).data;
+      return signedIn() && post.uid == uid
+        && (post.visibility == 'public'
+          || (post.visibility == 'followers' && firestore.exists(/databases/(default)/documents/users/$(uid)/followers/$(request.auth.uid)))
+          || (post.visibility == 'group' && firestore.exists(/databases/(default)/documents/groups/$(post.groupId)/members/$(request.auth.uid))));
+    }
+    function chatMember(chatId) {
+      return signedIn() && request.auth.uid in firestore.get(/databases/(default)/documents/chats/$(chatId)).data.participantIds;
+    }
+    match /profiles/{uid}/{filename} {
+      allow get: if signedIn();
+      // Profile photos are selected during onboarding, before active() becomes true.
+      allow create, update: if owner(uid) && imageWithin(5 * 1024 * 1024);
+      allow delete: if owner(uid);
+    }
+    match /posts/{uid}/{postId}/{filename} {
+      allow get: if owner(uid) || (signedIn()
+        && firestore.exists(/databases/(default)/documents/posts/$(postId)) && canReadPost(uid, postId));
+      allow create, update: if owner(uid) && completedAccount() && imageWithin(20 * 1024 * 1024);
+      allow delete: if owner(uid);
+    }
+    match /chats/{chatId}/{uid}/{filename} {
+      allow get: if chatMember(chatId);
+      allow create, update: if owner(uid) && chatMember(chatId) && imageWithin(20 * 1024 * 1024);
+      allow delete: if owner(uid);
+    }
+    // No directory listing or writes outside the three documented media paths.
+  }
+}

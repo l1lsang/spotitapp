@@ -2,11 +2,14 @@ import {
   arrayRemove,
   arrayUnion,
   collection,
+  deleteField,
   doc,
+  FieldPath,
   getDoc,
   onSnapshot,
   orderBy,
   query,
+  runTransaction,
   serverTimestamp,
   setDoc,
   updateDoc,
@@ -17,12 +20,13 @@ import {
   type QueryDocumentSnapshot,
   type Unsubscribe,
 } from 'firebase/firestore'
+import { CHAT_REACTION_OPTIONS } from '../lib/chatReactions'
 import { requireDb } from '../lib/firebase'
-import type { ChatMessage, ChatParticipant, DaymarkChat } from '../types/chat'
+import { assertCleanContent } from '../lib/contentFilter'
+import type { ChatMessage, ChatParticipant, ChatReactionEmoji, DaymarkChat } from '../types/chat'
 import type { NotificationActor } from '../types/notification'
 import type { DaymarkUser } from '../types/user'
-import { createNotifications } from './notificationService'
-import { listUsers } from './userService'
+import { queueNotification } from './notificationService'
 
 type ChatPerson = Pick<DaymarkUser, 'uid' | 'nickname' | 'photoURL'>
 
@@ -210,20 +214,6 @@ export async function addParticipantsToChat(chatId: string, members: ChatPerson[
   })
 }
 
-export async function getChatInviteCandidates(chatId: string): Promise<DaymarkUser[]> {
-  const db = requireDb()
-  const chat = toChat(await getDoc(doc(db, 'chats', chatId)))
-
-  if (!chat) {
-    return []
-  }
-
-  const users = await listUsers()
-  const participantIds = new Set(chat.participantIds)
-
-  return users.filter((user) => !participantIds.has(user.uid))
-}
-
 export async function getChatById(chatId: string, viewerUid: string): Promise<DaymarkChat | null> {
   const snapshot = await getDoc(doc(requireDb(), 'chats', chatId))
   const chat = toChat(snapshot)
@@ -298,6 +288,7 @@ export async function sendChatMessage(
   if (!trimmed && !hasPhoto) {
     return
   }
+  assertCleanContent(trimmed)
 
   const db = requireDb()
   const chatRef = doc(db, 'chats', chatId)
@@ -325,29 +316,52 @@ export async function sendChatMessage(
     updatedAt: serverTimestamp(),
   })
 
-  await batch.commit()
-
-  if (chat) {
-    await createNotifications(
-      chat.participantIds
-        .filter((participantUid) => participantUid !== author.uid)
-        .map((recipientUid) => ({
-          recipientUid,
-          actor: author,
-          type: 'chat',
-          title: '새 채팅 메시지',
-          message: `${author.nickname}: ${lastMessage}`,
-          href: `/chats/${chatId}`,
-          chatId,
-        })),
-    )
+  if (!chat || !chat.participantIds.includes(author.uid)) throw new Error('참여 중인 채팅방에만 보낼 수 있습니다.')
+  for (const recipientUid of chat.participantIds) {
+    if (recipientUid === author.uid) continue
+    queueNotification(batch, {
+      recipientUid, actor: author, type: 'chat', title: '새 채팅 메시지',
+      message: `${author.nickname}: ${lastMessage}`, href: `/chats/${chatId}`, chatId,
+    })
   }
+  await batch.commit()
 }
 
 export async function markChatAsRead(chatId: string, uid: string): Promise<void> {
   await updateDoc(doc(requireDb(), 'chats', chatId), {
     [`readAtBy.${uid}`]: serverTimestamp(),
     updatedAt: serverTimestamp(),
+  })
+}
+
+export async function toggleChatMessageReaction(
+  chatId: string,
+  messageId: string,
+  viewerUid: string,
+  emoji: ChatReactionEmoji,
+): Promise<void> {
+  if (!CHAT_REACTION_OPTIONS.some((option) => option.emoji === emoji)) {
+    throw new Error('지원하지 않는 이모지입니다.')
+  }
+
+  const db = requireDb()
+  const chatRef = doc(db, 'chats', chatId)
+  const messageRef = doc(db, 'chats', chatId, 'messages', messageId)
+
+  await runTransaction(db, async (transaction) => {
+    const chat = toChat(await transaction.get(chatRef))
+    if (!chat?.participantIds.includes(viewerUid)) {
+      throw new Error('참여 중인 채팅방에서만 메시지에 반응할 수 있습니다.')
+    }
+
+    const message = await transaction.get(messageRef)
+    if (!message.exists() || message.data().uid === 'deleted-user') {
+      throw new Error('반응할 수 없는 메시지입니다.')
+    }
+
+    // Address only this participant's key, including UIDs that contain dots.
+    const reactionPath = new FieldPath('reactionsBy', viewerUid)
+    transaction.update(messageRef, reactionPath, message.get(reactionPath) === emoji ? deleteField() : emoji)
   })
 }
 

@@ -1,0 +1,10 @@
+[
+  {
+    "date": "2026-10-14",
+    "scope": "app",
+    "macrostructure": "Photographic / Workbench / Long Document",
+    "theme": "Spotit reference",
+    "enrichment": "existing local photography",
+    "brief": "Apply the user-supplied desktop Spotit design to every Expo app screen"
+  }
+]

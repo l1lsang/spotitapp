@@ -30,11 +30,11 @@ export async function getPushPermissionStatus(): Promise<PushPermissionStatus> {
 export async function enablePushNotifications(uid: string) {
   if (!projectId) throw new Error("푸시 알림 설정이 아직 준비되지 않았습니다.");
   if (Platform.OS === "web" || Constants.appOwnership === "expo")
-    throw new Error("알림은 설치된 스팟잇 앱에서 켤 수 있습니다.");
+    throw new Error("알림은 설치된 피노리 앱에서 켤 수 있습니다.");
   const Notifications = await import("expo-notifications");
   if (Platform.OS === "android")
     await Notifications.setNotificationChannelAsync("default", {
-      name: "스팟잇 알림",
+      name: "피노리 알림",
       importance: Notifications.AndroidImportance.HIGH,
     });
   const permission = await Notifications.requestPermissionsAsync();

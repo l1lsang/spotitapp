@@ -3,6 +3,7 @@ import {
   type DocumentData, type QueryDocumentSnapshot, type Unsubscribe, type Transaction,
 } from 'firebase/firestore'
 import { requireDb } from '../lib/firebase'
+import { assertCleanContent } from '../lib/contentFilter'
 import { COMMENT_MAX_LENGTH, type PostComment, type PostReply } from '../types/comment'
 import type { NotificationActor } from '../types/notification'
 import type { Post } from '../types/post'
@@ -30,13 +31,15 @@ function toReply(snapshot: QueryDocumentSnapshot<DocumentData>, commentId: strin
 function checkedContent(content: string) {
   const trimmed = content.trim()
   if (!trimmed || trimmed.length > COMMENT_MAX_LENGTH) throw new Error(`댓글은 1~${COMMENT_MAX_LENGTH}자로 입력해 주세요.`)
+  assertCleanContent(trimmed)
   return trimmed
 }
 
+// replyCount is recounted by the server after a reply is saved, so it can lag
+// behind the replies themselves; replies are always read directly.
 export async function listComments(postId: string): Promise<PostComment[]> {
   const snapshot = await getDocs(query(collection(requireDb(), 'posts', postId, 'comments'), orderBy('createdAt', 'asc')))
   return Promise.all(snapshot.docs.map(async commentDoc => {
-    if (commentDoc.data().replyCount === 0) return toComment(commentDoc)
     const replies = await getDocs(query(collection(commentDoc.ref, 'replies'), orderBy('createdAt', 'asc')))
     return { ...toComment(commentDoc), replies: replies.docs.map(reply => toReply(reply, commentDoc.id)) }
   }))
@@ -58,14 +61,11 @@ export function subscribeToComments(postId: string, onChange: (comments: PostCom
   const stop = onSnapshot(query(collection(db, 'posts', postId, 'comments'), orderBy('createdAt', 'asc')), snapshot => {
     if (!active) return
     comments = snapshot.docs.map(toComment)
-    const commentIds = new Set(comments.map(comment => comment.id))
-    replies.forEach((_items, id) => { if (!commentIds.has(id)) replies.delete(id) })
-    const ids = new Set(snapshot.docs.filter(item => item.data().replyCount !== 0).map(item => item.id))
+    const ids = new Set(comments.map(comment => comment.id))
     subscriptions.forEach((unsubscribe, id) => {
       if (!ids.has(id)) { unsubscribe(); subscriptions.delete(id); replies.delete(id) }
     })
     comments.forEach(comment => {
-      if (!ids.has(comment.id)) { replies.set(comment.id, []); return }
       if (subscriptions.has(comment.id)) return
       subscriptions.set(comment.id, onSnapshot(
         query(collection(db, 'posts', postId, 'comments', comment.id, 'replies'), orderBy('createdAt', 'asc')),
@@ -95,7 +95,6 @@ export async function addComment(postId: string, author: NotificationActor, cont
       id: commentRef.id, uid: author.uid, authorNickname: author.nickname, authorPhotoURL: author.photoURL || '',
       content: trimmed, mentions, replyCount: 0, createdAt: serverTimestamp(),
     })
-    transaction.update(postRef, { commentCount: (post.commentCount || 0) + 1, updatedAt: serverTimestamp() })
     queueMentionNotifications(transaction, recipients, author, { postId, commentId: commentRef.id })
     if (!recipients.some(user => user.uid === post.uid)) queueNotification(transaction, {
       recipientUid: post.uid, actor: author, type: 'comment', title: '새 댓글',
@@ -123,8 +122,6 @@ export async function addReply(postId: string, commentId: string, author: Notifi
       id: replyRef.id, commentId, uid: author.uid, authorNickname: author.nickname, authorPhotoURL: author.photoURL || '',
       content: trimmed, mentions, createdAt: serverTimestamp(),
     })
-    transaction.update(commentRef, { replyCount: (comment.replyCount || 0) + 1 })
-    transaction.update(postRef, { commentCount: (post.commentCount || 0) + 1, updatedAt: serverTimestamp() })
     queueMentionNotifications(transaction, recipients, author, { postId, commentId, replyId: replyRef.id })
     const normalRecipients = new Set<string>([comment.uid, post.uid])
     recipients.forEach(user => normalRecipients.delete(user.uid))
@@ -148,10 +145,8 @@ export async function deleteComment(postId: string, commentId: string, requester
     const comment = commentSnapshot.data()
     const post = postSnapshot.data()
     if (comment.uid !== requesterUid && post.uid !== requesterUid) throw new Error('댓글 작성자 또는 글 작성자만 삭제할 수 있습니다.')
-    // Retain existing replies and serialize against concurrent additions/deletions.
-    if (comment.replyCount > 0) transaction.update(commentRef, { content: '', deleted: true })
-    else transaction.delete(commentRef)
-    transaction.update(postRef, { commentCount: Math.max(0, (post.commentCount || 0) - 1), updatedAt: serverTimestamp() })
+    // Marking blocks new replies; the server removes the comment once no reply remains.
+    transaction.update(commentRef, { content: '', deleted: true })
   }).catch(async error => {
     if (error.code !== 'permission-denied') throw error
     // Rules may see a concurrent deletion before transaction preconditions are checked.
@@ -174,8 +169,6 @@ export async function deleteReply(postId: string, commentId: string, replyId: st
     const comment = commentSnapshot.data()
     if (![replySnapshot.data().uid, post.uid, comment.uid].includes(requesterUid)) throw new Error('답글을 삭제할 권한이 없습니다.')
     transaction.delete(replyRef)
-    transaction.update(commentRef, { replyCount: Math.max(0, (comment.replyCount || 0) - 1) })
-    transaction.update(postRef, { commentCount: Math.max(0, (post.commentCount || 0) - 1), updatedAt: serverTimestamp() })
   }).catch(async error => {
     if (error.code !== 'permission-denied') throw error
     if ((await getDocFromServer(replyRef)).exists()) throw error

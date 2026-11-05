@@ -3,15 +3,41 @@ import { requireDb } from '../lib/firebase'
 import type { NotificationActor } from '../types/notification'
 import { queueNotification } from './notificationService'
 
+type ReactionCounts = { likeCount: number; commentCount: number }
+
+// The server recounts likes a moment after the like itself is saved. Until the
+// stored count moves away from the one this viewer acted on, show their change.
+const pendingLikes = new Map<string, { base: number; delta: number }>()
+const reactionListeners = new Map<string, Set<() => void>>()
+
+function withPendingLike(postId: string, counts: ReactionCounts): ReactionCounts {
+  const pending = pendingLikes.get(postId)
+  return pending && pending.base === counts.likeCount
+    ? { ...counts, likeCount: Math.max(0, counts.likeCount + pending.delta) }
+    : counts
+}
+
 export function subscribeToPostReactions(
   postId: string,
-  onChange: (counts: { likeCount: number; commentCount: number } | null) => void,
+  onChange: (counts: ReactionCounts | null) => void,
   onError: (error: Error) => void,
 ) {
-  return onSnapshot(doc(requireDb(), 'posts', postId), snapshot => {
+  let latest: ReactionCounts | null = null
+  const emit = () => { if (latest) onChange(withPendingLike(postId, latest)) }
+  const listeners = reactionListeners.get(postId) || new Set()
+  reactionListeners.set(postId, listeners.add(emit))
+  const stop = onSnapshot(doc(requireDb(), 'posts', postId), snapshot => {
     const data = snapshot.data()
-    onChange(data ? { likeCount: data.likeCount || 0, commentCount: data.commentCount || 0 } : null)
+    latest = data ? { likeCount: data.likeCount || 0, commentCount: data.commentCount || 0 } : null
+    if (latest && pendingLikes.get(postId)?.base !== latest.likeCount) pendingLikes.delete(postId)
+    if (latest) emit()
+    else onChange(null)
   }, onError)
+  return () => {
+    stop()
+    listeners.delete(emit)
+    if (!listeners.size) reactionListeners.delete(postId)
+  }
 }
 
 export function subscribeToLikeStatus(postId: string, uid: string, onChange: (liked: boolean) => void, onError: (error: Error) => void) {
@@ -22,7 +48,7 @@ export async function togglePostLike(postId: string, actor: NotificationActor): 
   const db = requireDb()
   const likeRef = doc(db, 'posts', postId, 'likes', actor.uid)
   const postRef = doc(db, 'posts', postId)
-  return runTransaction(db, async transaction => {
+  const { liked, base } = await runTransaction(db, async transaction => {
     const postSnapshot = await transaction.get(postRef)
     if (!postSnapshot.exists()) throw new Error('삭제되었거나 볼 수 없는 기록입니다.')
     const likeSnapshot = await transaction.get(likeRef)
@@ -36,9 +62,12 @@ export async function togglePostLike(postId: string, actor: NotificationActor): 
         href: `/posts/${postId}`, postId,
       })
     } else transaction.delete(likeRef)
-    transaction.update(postRef, {
-      likeCount: Math.max(0, (post.likeCount || 0) + (liked ? 1 : -1)), updatedAt: serverTimestamp(),
-    })
-    return liked
+    return { liked, base: (post.likeCount as number | undefined) || 0 }
   })
+  const pending = pendingLikes.get(postId)
+  const delta = (pending?.base === base ? pending.delta : 0) + (liked ? 1 : -1)
+  if (delta) pendingLikes.set(postId, { base, delta })
+  else pendingLikes.delete(postId)
+  reactionListeners.get(postId)?.forEach(emit => emit())
+  return liked
 }

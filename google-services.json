@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "860496376679",
+    "project_id": "naran-235a6",
+    "storage_bucket": "naran-235a6.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:860496376679:android:ca4aa4b115c38209de75c2",
+        "android_client_info": {
+          "package_name": "kr.spotitmap.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "860496376679-vrdmqnptj58o6pksku60kui30ud32c8j.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "kr.spotitmap.app",
+            "certificate_hash": "b80c7455c48713b81297ef999f7cceb26a9f09c0"
+          }
+        },
+        {
+          "client_id": "860496376679-l69fsap0apo38ttb5s09sva42vqagukk.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB9sic5vSoZs6rxFoDxffXSPvM-lCcG0UA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "860496376679-l69fsap0apo38ttb5s09sva42vqagukk.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "860496376679-dvcr5ljbmg0mps97l04grre6gd5l3j5q.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "kr.spotitmap.app"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

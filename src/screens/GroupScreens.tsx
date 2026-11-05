@@ -1,223 +1,269 @@
-import { useEffect, useState, type ReactNode } from 'react'
-import { ActivityIndicator, Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native'
-import { SafeAreaView } from 'react-native-safe-area-context'
-import { useLocalSearchParams, useRouter } from 'expo-router'
-import * as Clipboard from 'expo-clipboard'
-import { ChevronRight, Globe2, KeyRound, LockKeyhole, MapPin, UsersRound, X } from 'lucide-react-native'
-import { Button, Chip, Empty, Field, Notice, Screen, p } from '../components/ui'
-import { PostCard } from '../components/PostCard'
-import { useAuth } from '../hooks/useAuth'
-import { createGroup, getGroupInviteCode, joinGroupWithCode, setGroupMembership, subscribeGroup, subscribeGroups, subscribeMyGroupIds } from '../services/groupService'
-import { subscribeGroupPosts } from '../services/postService'
-import { getGroupInputError, type GroupVisibility, type PinGroup } from '../types/group'
-import type { Post } from '../types/post'
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Pressable, Share, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { Text } from '../components/Typography';
+import { router, useLocalSearchParams } from 'expo-router';
+import * as Clipboard from 'expo-clipboard';
+import { ArrowLeft, Check, Compass, Copy, Globe2, KeyRound, Lock, Map, MapPin, Plus, Share2, UsersRound } from 'lucide-react-native';
+import { Button, Empty, Field, IconButton, Notice, Screen, SearchBox, p, s } from '../components/ui';
+import { Dialog } from '../components/Dialog';
+import { PostCard } from '../components/PostCard';
+import { useAuth } from '../hooks/useAuth';
+import { useBlockedUsers, withoutBlocked } from '../hooks/useBlockedUsers';
+import { useGroups } from '../hooks/useGroups';
+import { createGroup, getGroupInviteCode, joinGroupWithCode, setGroupMembership } from '../services/groupService';
+import { subscribeGroupPosts } from '../services/postService';
+import { getGroupInputError, isGroupInviteCode, normalizeGroupInviteCode, type GroupVisibility, type PinGroup } from '../types/group';
+import type { Post } from '../types/post';
 
-function useGroupCatalog(uid?: string, ready?: boolean) {
-  const [groups, setGroups] = useState<PinGroup[]>([])
-  const [joinedIds, setJoinedIds] = useState<string[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [revision, retry] = useState(0)
-  useEffect(() => {
-    setGroups([]); setJoinedIds([]); setError('')
-    if (!uid || !ready) { setLoading(false); return }
-    setLoading(true)
-    let publicReady = false
-    let membersReady = false
-    let publicGroups: PinGroup[] = []
-    const members = new Map<string, PinGroup>()
-    const subscriptions = new Map<string, () => void>()
-    const pending = new Set<string>()
-    const publish = () => {
-      const merged = new Map(publicGroups.map(group => [group.id, group]))
-      members.forEach((group, id) => merged.set(id, group))
-      setGroups([...merged.values()].sort((a, b) => (b.createdAt?.toMillis() || 0) - (a.createdAt?.toMillis() || 0)))
-      if (publicReady && membersReady && !pending.size) setLoading(false)
-    }
-    const fail = (e: Error) => { setError(e.message); setLoading(false) }
-    const stopPublic = subscribeGroups(next => { publicGroups = next; publicReady = true; publish() }, fail)
-    const stopMember = subscribeMyGroupIds(uid, ids => {
-      setJoinedIds(ids); membersReady = true
-      for (const [id, stop] of subscriptions) {
-        if (!ids.includes(id)) { stop(); subscriptions.delete(id); members.delete(id); pending.delete(id) }
-      }
-      for (const id of ids) {
-        if (subscriptions.has(id)) continue
-        pending.add(id); setLoading(true)
-        subscriptions.set(id, subscribeGroup(id, group => {
-          if (group) members.set(id, group)
-          else members.delete(id)
-          pending.delete(id); publish()
-        }, e => {
-          members.delete(id); pending.delete(id); publish()
-          // A departing member can lose document permission before the membership update arrives.
-          if ((e as Error & { code?: string }).code !== 'permission-denied') fail(e)
-        }))
-      }
-      publish()
-    }, fail)
-    return () => { stopPublic(); stopMember(); subscriptions.forEach(stop => stop()) }
-  }, [uid, ready, revision])
-  return { groups, joinedIds, loading, error, retry: () => retry(value => value + 1) }
+const errorText = (e: unknown) => e instanceof Error ? e.message : '처리하지 못했습니다. 다시 시도해 주세요.';
+function BackLink({ title, to }: { title: string; to: '/map' | '/groups' }) {
+  return <Pressable accessibilityRole="link" style={[s.row, { gap: 7, minHeight: 44, alignSelf: 'flex-start' }]} onPress={() => router.push(to)}><ArrowLeft size={17} color={p.muted} /><Text style={{ color: p.muted, fontSize: 14.4 }}>{title}</Text></Pressable>;
 }
-
+export function JoinGroupButton({ group, joined, allowLeave = false, compact = false, tone }: { group: Pick<PinGroup, 'id' | 'visibility'>; joined: boolean; allowLeave?: boolean; compact?: boolean; tone?: 'outline' | 'plain' | 'ghost' }) {
+  const { currentUser } = useAuth();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [joining, setJoining] = useState(false);
+  const pending = useRef(false);
+  async function change() {
+    if (!currentUser || pending.current) return;
+    if (!joined && group.visibility === 'private') { setJoining(true); return; }
+    pending.current = true; setBusy(true); setError('');
+    try { await setGroupMembership(group.id, currentUser.uid, !joined); }
+    catch { setError('가입 상태를 변경하지 못했습니다. 다시 시도해 주세요.'); }
+    finally { pending.current = false; setBusy(false); }
+  }
+  return <View style={{ gap: 8, maxWidth: compact ? 240 : undefined }}>
+    <Button title={busy ? '처리 중…' : joined ? allowLeave ? '그룹 탈퇴' : '가입 완료' : group.visibility === 'private' ? '코드로 가입' : '바로 가입'} variant={joined ? 'secondary' : 'primary'} tone={tone} style={compact ? g.compactButton : undefined} disabled={busy || !currentUser || (joined && !allowLeave)} icon={joined ? <Check size={17} color={p.ink} /> : <Plus size={17} color={p.paper} />} onPress={() => void change()} />
+    {!!error && <Notice error>{error}</Notice>}
+    <JoinGroupDialog visible={joining} groupId={group.id} onClose={() => setJoining(false)} onJoined={() => setJoining(false)} />
+  </View>;
+}
+function JoinGroupDialog({ visible, groupId, onClose, onJoined }: { visible: boolean; groupId?: string; onClose: () => void; onJoined: (id: string) => void }) {
+  const { currentUser } = useAuth();
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const pending = useRef(false);
+  useEffect(() => { if (visible) { setCode(''); setError(''); } }, [visible]);
+  async function join() {
+    if (!currentUser || pending.current) return;
+    pending.current = true; setBusy(true); setError('');
+    try { onJoined(await joinGroupWithCode(code, currentUser.uid, groupId)); }
+    catch (e) { setError(e instanceof Error && !('code' in e) ? e.message : '가입하지 못했습니다. 초대코드를 확인하고 다시 시도해 주세요.'); }
+    finally { pending.current = false; setBusy(false); }
+  }
+  return <Dialog visible={visible} title="초대코드로 가입" onClose={onClose} busy={busy}>
+    <Text style={g.note}>그룹 멤버에게 받은 12자리 초대코드를 입력해 주세요.</Text>
+    <Field label="초대코드" autoFocus value={code} editable={!busy} onChangeText={value => { setCode(value); setError(''); }} autoCapitalize="characters" autoCorrect={false} maxLength={24} placeholder="ABCD-EFGH-2345" style={{ letterSpacing: 1.6 }} />
+    {!!error && <Notice error>{error}</Notice>}
+    <View style={g.modalActions}><Button title="취소" variant="secondary" style={g.flex} disabled={busy} onPress={onClose} /><Button title={busy ? '가입 중…' : '그룹 가입하기'} style={g.flex} disabled={!currentUser || busy || !isGroupInviteCode(normalizeGroupInviteCode(code))} onPress={() => void join()} /></View>
+  </Dialog>;
+}
+function CreateGroupDialog({ visible, onClose, onCreated }: { visible: boolean; onClose: () => void; onCreated: (id: string) => void }) {
+  const { currentUser } = useAuth();
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [visibility, setVisibility] = useState<GroupVisibility>('public');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const pending = useRef(false);
+  useEffect(() => { if (visible) { setName(''); setDescription(''); setVisibility('public'); setError(''); } }, [visible]);
+  async function create() {
+    if (!currentUser || pending.current) return;
+    const input = { name, description, visibility };
+    const validation = getGroupInputError(input);
+    if (validation) { setError(validation); return; }
+    pending.current = true; setBusy(true); setError('');
+    try { onCreated(await createGroup(input, currentUser.uid)); }
+    catch (e) { setError(errorText(e)); }
+    finally { pending.current = false; setBusy(false); }
+  }
+  return <Dialog visible={visible} title="새 그룹 만들기" eyebrow="함께 만드는 장소 모음" onClose={onClose} busy={busy}>
+    <Field label="그룹 이름" autoFocus value={name} editable={!busy} onChangeText={setName} maxLength={40} placeholder="예: 서울의 작은 책방" />
+    <Field label="그룹 소개  선택" value={description} editable={!busy} onChangeText={setDescription} maxLength={240} multiline placeholder="어떤 장소를 함께 모으고 싶나요?" />
+    <View accessibilityRole="radiogroup" accessibilityLabel="그룹 공개 범위">
+      <Text style={[g.label, { marginBottom: 2 }]}>그룹 공개 범위</Text>
+      {(['public', 'private'] as const).map(value => {
+        const selected = visibility === value;
+        return <Pressable key={value} accessibilityRole="radio" accessibilityState={{ checked: selected, disabled: busy }} disabled={busy} onPress={() => setVisibility(value)} style={g.visibility}>
+          <View style={[g.radio, selected && g.radioOn]} />{value === 'public' ? <Globe2 size={20} color={p.primary} /> : <Lock size={20} color={p.primary} />}
+          <View style={{ flex: 1, gap: 4 }}><Text style={[g.label, selected && { color: p.primary }]}>{value === 'public' ? '공개 그룹' : '비공개 그룹'}</Text><Text style={g.small}>{value === 'public' ? '누구나 그룹과 핀을 둘러보고 코드 없이 바로 가입할 수 있어요.' : '검색에 표시되지 않고, 멤버만 그룹과 핀을 볼 수 있어요.'}</Text></View>
+        </Pressable>;
+      })}
+    </View>
+    <Text style={g.note}>공개 그룹은 초대코드 없이 바로 가입할 수 있고, 비공개 그룹은 초대코드가 있어야 가입할 수 있어요. 그룹을 만들면 자동으로 가입돼요.</Text>
+    {!!error && <Notice error>{error}</Notice>}
+    <View style={g.modalActions}><Button title="취소" variant="secondary" style={g.flex} disabled={busy} onPress={onClose} /><Button title={busy ? '만드는 중…' : '그룹 만들기'} style={g.flex} disabled={busy || !currentUser || name.trim().length < 2} onPress={() => void create()} /></View>
+  </Dialog>;
+}
 export function GroupsScreen() {
-  const router = useRouter()
-  const { currentUser, firebaseReady } = useAuth()
-  const catalog = useGroupCatalog(currentUser?.uid, firebaseReady)
-  const [tab, setTab] = useState<'discover' | 'mine'>('discover')
-  const [keyword, setKeyword] = useState('')
-  const [dialog, setDialog] = useState<'create' | 'join' | null>(null)
-  const [name, setName] = useState('')
-  const [description, setDescription] = useState('')
-  const [visibility, setVisibility] = useState<GroupVisibility>('public')
-  const [code, setCode] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const groups = catalog.groups.filter(group => (tab === 'mine' ? catalog.joinedIds.includes(group.id) : group.visibility === 'public') && `${group.name} ${group.description}`.toLowerCase().includes(keyword.trim().toLowerCase()))
-
-  async function submit() {
-    if (!currentUser || busy) return
-    setError('')
-    if (dialog === 'create') {
-      const validation = getGroupInputError({ name, description, visibility })
-      if (validation) { setError(validation); return }
-    }
-    setBusy(true)
-    try {
-      const id = dialog === 'create' ? await createGroup({ name, description, visibility }, currentUser.uid) : await joinGroupWithCode(code, currentUser.uid)
-      setDialog(null); setName(''); setDescription(''); setCode('')
-      router.push({ pathname: '/groups/[groupId]', params: { groupId: id } })
-    } catch (e) { setError(errorText(e)) }
-    finally { setBusy(false) }
-  }
-
-  return <Screen title="함께 모으는 장소" back refreshing={catalog.loading} onRefresh={catalog.retry}>
-    <View style={styles.hero}><View style={styles.heroIcon}><UsersRound size={27} color={p.primary} /></View><Text style={styles.heroTitle}>우리만의 장소 지도</Text><Text style={styles.description}>친구와 함께, 취향이 비슷한 사람과 함께.{ '\n' }좋아하는 장소를 한곳에 모아 보세요.</Text></View>
-    {!currentUser ? <><Empty title="로그인이 필요해요" description="로그인하고 그룹을 둘러보거나 만들어 보세요." /><Button title="로그인" onPress={() => router.push('/login')} /></> : <>
-      <View style={styles.actions}><View style={{ flex: 1 }}><Button title="그룹 만들기" onPress={() => { setError(''); setDialog('create') }} /></View><View style={{ flex: 1 }}><Button title="초대코드로 가입" variant="secondary" onPress={() => { setError(''); setDialog('join') }} /></View></View>
-      <View style={styles.actions}><Chip label="공개 그룹" selected={tab === 'discover'} onPress={() => setTab('discover')} /><Chip label={`내 그룹 ${catalog.joinedIds.length}`} selected={tab === 'mine'} onPress={() => setTab('mine')} /></View>
-      <Field value={keyword} onChangeText={setKeyword} placeholder="그룹 이름이나 소개 검색" accessibilityLabel="그룹 검색" />
-      {catalog.error ? <Notice error>{catalog.error}</Notice> : null}
-      {catalog.loading ? <ActivityIndicator color={p.primary} style={{ margin: 24 }} /> : null}
-      {!catalog.loading && !groups.length && !catalog.error ? <Empty title={tab === 'mine' ? '아직 가입한 그룹이 없어요' : '검색된 그룹이 없어요'} description={tab === 'mine' ? '공개 그룹을 둘러보거나 초대코드로 가입해 보세요.' : '새로운 취향의 모임을 직접 만들어 보세요.'} /> : null}
-      {groups.map(group => <Pressable key={group.id} style={styles.groupCard} accessibilityRole="button" onPress={() => router.push({ pathname: '/groups/[groupId]', params: { groupId: group.id } })}>
-        <View style={styles.row}><View style={styles.groupIcon}>{group.visibility === 'private' ? <LockKeyhole size={23} color={p.primary} /> : <Globe2 size={23} color={p.primary} />}</View><View style={{ flex: 1 }}><Text style={styles.cardTitle}>{group.name}</Text><Text style={styles.small}>{group.visibility === 'private' ? '비공개 그룹' : '공개 그룹'} · {group.memberCount}명</Text></View><ChevronRight color={p.muted} size={20} /></View>
-        {group.description ? <Text numberOfLines={3} style={styles.description}>{group.description}</Text> : null}
-        {catalog.joinedIds.includes(group.id) ? <Text style={styles.joined}>가입한 그룹</Text> : <Text style={styles.small}>초대코드 없이 바로 가입할 수 있어요</Text>}
-      </Pressable>)}
-    </>}
-    <GroupSheet visible={dialog !== null} title={dialog === 'create' ? '새 그룹 만들기' : '초대코드로 가입'} onClose={() => { if (!busy) setDialog(null) }}>
-      {dialog === 'create' ? <>
-        <Field label="그룹 이름" value={name} onChangeText={setName} maxLength={40} placeholder="예: 우리 동네 작은 카페" />
-        <Field label="그룹 소개" value={description} onChangeText={setDescription} maxLength={240} multiline placeholder="어떤 장소를 함께 모으고 싶나요?" />
-        <Text style={styles.cardTitle}>공개 범위</Text><View style={styles.actions}><Chip label="공개" selected={visibility === 'public'} onPress={() => setVisibility('public')} /><Chip label="비공개" selected={visibility === 'private'} onPress={() => setVisibility('private')} /></View>
-        <Notice>{visibility === 'public' ? '로그인한 누구나 그룹을 찾고 바로 가입할 수 있어요.' : '초대코드로 가입한 멤버만 그룹과 핀을 볼 수 있어요.'} 그룹을 만든 뒤 공개 범위는 변경할 수 없어요.</Notice>
-      </> : <><KeyRound size={34} color={p.primary} /><Text style={styles.description}>멤버에게 받은 12자리 초대코드를 입력해 주세요.</Text><Field label="초대코드" value={code} onChangeText={setCode} autoCapitalize="characters" autoCorrect={false} maxLength={24} placeholder="ABCD EFGH JKLM" /></>}
-      {error ? <Notice error>{error}</Notice> : null}<Button title={dialog === 'create' ? '그룹 만들기' : '가입하기'} loading={busy} disabled={!firebaseReady} onPress={() => void submit()} />
-    </GroupSheet>
-  </Screen>
+  const catalog = useGroups();
+  const { width } = useWindowDimensions();
+  const narrow = width <= 640;
+  const [tab, setTab] = useState<'all' | 'joined'>('all');
+  const [keyword, setKeyword] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [joining, setJoining] = useState(false);
+  const term = keyword.trim().toLocaleLowerCase();
+  const filtered = catalog.groups.filter(group => (tab === 'all' ? group.visibility !== 'private' : catalog.joinedIds.includes(group.id)) && `${group.name} ${group.description}`.toLocaleLowerCase().includes(term));
+  const openGroup = (id: string) => router.push({ pathname: '/groups/[groupId]', params: { groupId: id } });
+  return <Screen refreshing={catalog.loading} onRefresh={catalog.retry}>
+    <BackLink title="지도로 돌아가기" to="/map" />
+    <View style={[g.intro, !narrow && { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: 28 }]}>
+      <View style={{ gap: 14, flexShrink: 1, minWidth: 0 }}>
+        <Text accessibilityRole="header" style={[g.title, !narrow && { fontSize: 38, lineHeight: 50 }]}>{'취향이 닿는 곳,\n함께 핀을 모아요.'}</Text>
+        <Text style={g.introText}>{'동네 맛집부터 나만 아는 산책길까지.\n마음에 드는 그룹에 가입하고 나의 장소를 나눠보세요.'}</Text>
+      </View>
+      <View style={[g.introActions, narrow && { width: '100%' }]}><Button title="초대코드로 가입" variant="secondary" style={narrow && g.flex} icon={<KeyRound size={18} color={p.ink} />} onPress={() => setJoining(true)} /><Button title="그룹 만들기" style={narrow && g.flex} icon={<Plus size={18} color={p.paper} />} onPress={() => setCreating(true)} /></View>
+    </View>
+    <View style={[g.tools, !narrow && { flexDirection: 'row', alignItems: 'center' }]}>
+      <View accessibilityRole="tablist" accessibilityLabel="그룹 필터" style={[g.filters, !narrow && { width: 320 }]}>
+        {(['all', 'joined'] as const).map(value => {
+          const selected = tab === value;
+          const color = selected ? p.primary : p.muted;
+          return <Pressable key={value} accessibilityRole="tab" accessibilityState={{ selected }} onPress={() => setTab(value)} style={g.filter}>
+            {value === 'all' ? <Compass size={16} color={color} /> : <UsersRound size={16} color={color} />}
+            <Text style={{ color, fontSize: 13.76, fontWeight: '600' }}>{value === 'all' ? '그룹 둘러보기' : '내 그룹'}</Text>
+            {value === 'joined' && !catalog.loading && !catalog.error && <Text style={[g.count, selected && { backgroundColor: p.primarySoft }]}>{catalog.joinedIds.length}</Text>}
+          </Pressable>;
+        })}
+      </View>
+      <SearchBox value={keyword} onChangeText={setKeyword} placeholder="이름이나 관심사로 그룹 찾기" accessibilityLabel="그룹 검색" style={!narrow && { flex: 1 }} />
+    </View>
+    {!!catalog.error && <><Notice error>{catalog.error}</Notice><Button title="다시 시도" variant="secondary" onPress={catalog.retry} /></>}
+    {catalog.loading && <Text style={g.emptyText}>함께할 그룹을 불러오는 중입니다.</Text>}
+    {!catalog.loading && !catalog.error && !filtered.length && <View style={g.empty}><Compass size={36} color={p.muted} strokeWidth={1.3} /><Empty title={term ? '검색 결과가 없어요' : tab === 'joined' ? '아직 가입한 그룹이 없어요' : '첫 그룹을 만들어 보세요'} description={term ? '다른 이름이나 관심사로 찾아보세요.' : '좋아하는 장소를 모으며 같은 취향의 사람들을 만나보세요.'} />{tab === 'joined' && !term && <Button title="그룹 둘러보기" variant="secondary" onPress={() => setTab('all')} />}</View>}
+    {!catalog.loading && !catalog.error && filtered.length > 0 && <View accessibilityLabel="그룹 목록">{filtered.map(group => <View key={group.id} style={[g.listRow, width <= 620 && { flexWrap: 'wrap', alignItems: 'flex-start', gap: 0 }]}>
+      <Pressable accessibilityRole="link" accessibilityLabel={group.name + ' 그룹 보기'} onPress={() => openGroup(group.id)} style={({ pressed }) => [g.listMain, width <= 620 && { flexBasis: '100%' }, pressed && { opacity: 0.7 }]}>
+        <View style={g.listSymbol}>{group.visibility === 'private' ? <Lock size={22} color={p.muted} /> : <Compass size={22} color={p.muted} />}</View>
+        <View style={g.listCopy}>
+          <Text style={g.listName}>{group.name}</Text>
+          {!!group.description && <Text style={g.listDescription}>{group.description}</Text>}
+          <Text style={g.tiny}>{group.visibility === 'private' ? '비공개' : '공개'} · 멤버 {group.memberCount}명</Text>
+        </View>
+      </Pressable>
+      <View style={width <= 620 ? { paddingLeft: 56 } : undefined}><JoinGroupButton group={group} joined={catalog.joinedIds.includes(group.id)} compact tone="ghost" /></View>
+    </View>)}</View>}
+    <CreateGroupDialog visible={creating} onClose={() => setCreating(false)} onCreated={id => { setCreating(false); openGroup(id); }} />
+    <JoinGroupDialog visible={joining} onClose={() => setJoining(false)} onJoined={id => { setJoining(false); openGroup(id); }} />
+  </Screen>;
 }
-
 export function GroupDetailScreen() {
-  const router = useRouter()
-  const params = useLocalSearchParams<{ groupId: string }>()
-  const groupId = Array.isArray(params.groupId) ? params.groupId[0] : params.groupId
-  const { currentUser, firebaseReady } = useAuth()
-  const [group, setGroup] = useState<PinGroup | null>(null)
-  const [joined, setJoined] = useState(false)
-  const [membershipLoaded, setMembershipLoaded] = useState(false)
-  const [loading, setLoading] = useState(true)
-  const [postsLoading, setPostsLoading] = useState(false)
-  const [posts, setPosts] = useState<Post[]>([])
-  const [error, setError] = useState('')
-  const [postsError, setPostsError] = useState('')
-  const [actionError, setActionError] = useState('')
-  const [invite, setInvite] = useState('')
-  const [code, setCode] = useState('')
-  const [showCode, setShowCode] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [revision, setRevision] = useState(0)
-  const uid = currentUser?.uid
-
+  const { groupId = '' } = useLocalSearchParams<{ groupId: string }>();
+  const { currentUser, firebaseReady } = useAuth();
+  const catalog = useGroups();
+  const { width } = useWindowDimensions();
+  const narrow = width <= 640;
+  const group = catalog.groups.find(item => item.id === groupId);
+  const joined = catalog.joinedIds.includes(groupId);
+  const canRead = Boolean(group && (group.visibility !== 'private' || joined));
+  const [allPosts, setPosts] = useState<Post[]>([]);
+  const { ids: blockedIds } = useBlockedUsers();
+  const posts = useMemo(() => withoutBlocked(allPosts, blockedIds), [allPosts, blockedIds]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [revision, setRevision] = useState(0);
+  const [shareMessage, setShareMessage] = useState('');
+  const [gridWidth, setGridWidth] = useState(0);
+  const map = () => router.push({ pathname: '/map', params: { group: groupId } });
   useEffect(() => {
-    setJoined(false); setMembershipLoaded(false)
-    if (!uid || !firebaseReady) { setMembershipLoaded(true); return }
-    return subscribeMyGroupIds(uid, ids => { setJoined(ids.includes(groupId)); setMembershipLoaded(true) }, e => { setError(e.message); setMembershipLoaded(true) })
-  }, [uid, firebaseReady, groupId, revision])
-  useEffect(() => {
-    setGroup(null); setError(''); setInvite('')
-    if (!uid || !groupId || !firebaseReady || !membershipLoaded) { setLoading(false); return }
-    setLoading(true)
-    return subscribeGroup(groupId, next => { setGroup(next); setLoading(false) }, e => { setError(e.message); setLoading(false) })
-  }, [groupId, uid, firebaseReady, membershipLoaded, joined, revision])
-  const canReadPins = Boolean(group && (group.visibility === 'public' || joined))
-  useEffect(() => {
-    setPosts([]); setPostsError('')
-    if (!uid || !firebaseReady || !canReadPins || !group) { setPostsLoading(false); return }
-    setPostsLoading(true)
-    return subscribeGroupPosts(groupId, next => { setPosts(next); setPostsLoading(false) }, e => { setPostsError(e.message); setPostsLoading(false) }, group.visibility)
-  }, [groupId, group?.visibility, canReadPins, uid, firebaseReady, revision])
-
-  async function changeMembership(shouldJoin: boolean) {
-    if (!uid || busy) return
-    setBusy(true); setActionError('')
-    try {
-      if (shouldJoin && (!group || group.visibility === 'private')) await joinGroupWithCode(code, uid, groupId)
-      else await setGroupMembership(groupId, uid, shouldJoin)
-      setCode(''); setShowCode(false)
-      if (!shouldJoin && group?.visibility === 'private') router.replace('/groups')
-    } catch (e) { setActionError(errorText(e)) }
-    finally { setBusy(false) }
-  }
-  async function loadInvite() {
-    if (busy) return
-    setBusy(true); setActionError('')
-    try { setInvite(await getGroupInviteCode(groupId)); setShowCode(true) }
-    catch (e) { setActionError(errorText(e)) }
-    finally { setBusy(false) }
-  }
+    setPosts([]); setError('');
+    if (!currentUser || !firebaseReady || !canRead) { setLoading(false); return; }
+    setLoading(true);
+    return subscribeGroupPosts(groupId, next => { setPosts(next); setLoading(false); }, () => { setPosts([]); setError('그룹 핀을 불러오지 못했습니다.'); setLoading(false); }, group?.visibility);
+  }, [groupId, currentUser?.uid, firebaseReady, canRead, group?.visibility, revision]);
   async function share() {
-    const webUrl = (process.env.EXPO_PUBLIC_WEB_URL || 'https://spotitmap.kr').replace(/\/$/, '')
-    try { await Share.share({ title: group?.name, message: `${group?.name || '스팟잇 그룹'}에서 함께 장소를 모아요.\n${group?.visibility === 'private' ? '가입하려면 그룹 멤버에게 초대코드를 받아 주세요.\n' : ''}${webUrl}/groups/${groupId}` }) }
-    catch (e) { setActionError(errorText(e)) }
+    const url = (process.env.EXPO_PUBLIC_WEB_URL || 'https://www.pinori.kr').replace(/\/$/, '') + '/groups/' + groupId;
+    try { await Share.share({ title: group?.name, message: (group?.visibility === 'private' ? '함께 장소를 모아요. 그룹 멤버에게 초대코드를 받아 가입해 주세요.' : '함께 장소를 모아요. 초대코드 없이 바로 가입할 수 있어요.') + '\n' + url }); }
+    catch { setShareMessage('공유하지 못했습니다. 다시 시도해 주세요.'); }
   }
-
-  return <Screen title={group?.name || '그룹'} back refreshing={loading || postsLoading} onRefresh={() => setRevision(v => v + 1)}>
-    {!uid ? <><Empty title="로그인이 필요해요" /><Button title="로그인" onPress={() => router.push('/login')} /></> : loading ? <ActivityIndicator color={p.primary} style={{ margin: 32 }} /> : !group ? <>
-      <Empty title="가입이 필요하거나 찾을 수 없는 그룹이에요" description="비공개 그룹은 멤버에게 받은 초대코드로 가입해 주세요." />
-      {error ? <Notice error>{error}</Notice> : null}
-      <Field label="초대코드" value={code} onChangeText={setCode} autoCapitalize="characters" autoCorrect={false} placeholder="12자리 초대코드" />
-      <Button title="초대코드로 가입" loading={busy} onPress={() => void changeMembership(true)} /><Button title="그룹 둘러보기" variant="secondary" onPress={() => router.replace('/groups')} />
-    </> : <>
-      <View style={styles.hero}><View style={styles.heroIcon}>{group.visibility === 'private' ? <LockKeyhole size={27} color={p.primary} /> : <UsersRound size={27} color={p.primary} />}</View><Text style={styles.small}>{group.visibility === 'private' ? '비공개 그룹 · 멤버만 볼 수 있어요' : '공개 그룹 · 누구나 바로 가입'}</Text><Text style={styles.heroTitle}>{group.name}</Text>{group.description ? <Text style={styles.description}>{group.description}</Text> : null}<Text style={styles.joined}>{group.memberCount}명이 함께 장소를 모으고 있어요</Text></View>
-      {joined ? <>
-        <Button title="지도에서 핀 남기기" onPress={() => router.push({ pathname: '/map', params: { group: groupId } })} />
-        {group.visibility === 'private' ? <Button title="초대코드 보기" variant="secondary" loading={busy} onPress={() => void loadInvite()} /> : null}
-        <Pressable accessibilityRole="button" style={styles.leave} onPress={() => Alert.alert('그룹에서 나갈까요?', '남긴 핀은 유지됩니다. 비공개 그룹은 다시 초대코드로 가입해야 해요.', [{ text: '취소', style: 'cancel' }, { text: '그룹 탈퇴', style: 'destructive', onPress: () => void changeMembership(false) }])}><Text style={styles.small}>그룹 탈퇴</Text></Pressable>
-      </> : <Button title={group.visibility === 'private' ? '초대코드로 가입' : '그룹 바로 가입'} loading={busy} onPress={() => group.visibility === 'private' ? setShowCode(true) : void changeMembership(true)} />}
-      {canReadPins ? <View style={styles.actions}><View style={{ flex: 1 }}><Button title="지도에서 모아보기" variant="secondary" onPress={() => router.push({ pathname: '/map', params: { group: groupId } })} /></View><View style={{ flex: 1 }}><Button title="그룹 공유" variant="secondary" onPress={() => void share()} /></View></View> : null}
-      {canReadPins ? <><View style={styles.sectionTitle}><MapPin color={p.primary} size={20} /><Text style={styles.cardTitle}>함께 모은 핀</Text><Text style={styles.small}>{posts.length}</Text></View>{postsError ? <Notice error>{postsError}</Notice> : null}{!posts.length && !postsLoading && !postsError ? <Empty title="첫 번째 핀을 남겨 보세요" description="함께 기억하고 싶은 장소를 지도에 기록해 보세요." /> : null}{posts.map(post => <PostCard key={post.id} post={post} />)}</> : null}
-    </>}
-    {actionError ? <Notice error>{actionError}</Notice> : null}
-    <GroupSheet visible={showCode} title={joined ? '그룹 초대코드' : '초대코드로 가입'} onClose={() => { if (!busy) setShowCode(false) }}>
-      {joined ? <><Text style={styles.description}>함께하고 싶은 사람에게 초대코드를 전달해 주세요.</Text><Text selectable style={styles.inviteCode}>{invite}</Text><Button title="초대코드 복사" onPress={() => { void Clipboard.setStringAsync(invite).then(() => Alert.alert('복사했어요', '초대코드를 친구에게 전달해 주세요.')).catch(e => setActionError(errorText(e))) }} /></> : <><Field label="초대코드" value={code} onChangeText={setCode} autoCapitalize="characters" autoCorrect={false} placeholder="12자리 초대코드" /><Button title="가입하기" loading={busy} onPress={() => void changeMembership(true)} /></>}
-      {actionError ? <Notice error>{actionError}</Notice> : null}
-    </GroupSheet>
-  </Screen>
+  if (catalog.loading) return <Screen><Text style={g.emptyText}>그룹을 불러오는 중입니다.</Text></Screen>;
+  if (catalog.error || !group || !canRead) return <Screen><Empty title={catalog.error ? '그룹을 불러오지 못했어요' : '가입이 필요하거나 찾을 수 없는 그룹이에요'} description={catalog.error || '비공개 그룹은 초대코드로 가입한 뒤 볼 수 있어요.'} />{catalog.error ? <Button title="다시 시도" variant="secondary" onPress={catalog.retry} /> : <JoinGroupButton group={{ id: groupId, visibility: 'private' }} joined={false} />}<Button title="그룹 둘러보기" onPress={() => router.push('/groups')} /></Screen>;
+  // Same column rule as the web grid: as many 280px cards as fit, one column on phones.
+  const columns = width <= 620 ? 1 : Math.max(1, Math.floor((gridWidth + 24) / 304));
+  const cardWidth = gridWidth ? (gridWidth - (columns - 1) * 24) / columns : undefined;
+  return <Screen refreshing={loading} onRefresh={() => setRevision(value => value + 1)}>
+    <BackLink title="그룹 둘러보기" to="/groups" />
+    <View style={[g.home, narrow && { paddingTop: 8 }]}>
+      <View style={[s.row, { gap: narrow ? 12 : 18 }]}>
+        <View style={[g.symbol, { width: 46, height: 46, borderRadius: 23 }]}>{group.visibility === 'private' ? <Lock size={30} color={p.primary} /> : <Compass size={30} color={p.primary} />}</View>
+        <View style={{ flex: 1, minWidth: 0, gap: 7 }}><Text style={g.eyebrow}>{group.visibility === 'private' ? '비공개 그룹' : '공개 그룹'}</Text><Text accessibilityRole="header" style={[g.homeTitle, !narrow && { fontSize: 32, lineHeight: 40 }]}>{group.name}</Text></View>
+        <IconButton label="그룹 공유" variant="round" onPress={() => void share()}><Share2 size={19} color={p.ink} /></IconButton>
+      </View>
+      {!!group.description && <Text style={g.groupDescription}>{group.description}</Text>}
+      <View style={[g.homeFooter, !narrow && { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}>
+        <View style={[s.row, { flexWrap: 'wrap', gap: 14 }]}>
+          <View style={[s.row, { gap: 6 }]}><UsersRound size={16} color={p.muted} /><Text style={g.small}>멤버 {group.memberCount}명</Text></View>
+          <View style={[s.row, { gap: 6 }]}><MapPin size={16} color={p.muted} /><Text style={g.small}>{loading ? '핀 불러오는 중' : `핀 ${posts.length}개`}</Text></View>
+          {group.ownerUid === currentUser?.uid && <Text style={g.pill}>내가 만든 그룹</Text>}
+        </View>
+        <JoinGroupButton group={group} joined={joined} allowLeave tone="plain" />
+      </View>
+      {!!shareMessage && <Text accessibilityLiveRegion="polite" style={g.note}>{shareMessage}</Text>}
+    </View>
+    {joined && group.visibility === 'private' && <GroupInvitePanel groupId={groupId} />}
+    <View style={[g.participation, !narrow && { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}>
+      <View style={{ flexShrink: 1, gap: 5 }}><Text style={{ color: p.ink, fontSize: 16, lineHeight: 25.6 }}>{joined ? '지도 탭에서 장소를 검색하거나 지도를 한 번 눌러 그룹 핀을 남겨보세요.' : '이 그룹이 마음에 드나요? 바로 가입하고 나의 장소도 함께 모아보세요.'}</Text>{joined && <Text style={g.small}>탈퇴해도 남긴 핀은 유지되며, 내 핀은 언제든 수정·삭제할 수 있어요.</Text>}</View>
+      <Button title={joined ? '지도에서 핀 남기기' : '지도에서 그룹 핀 보기'} icon={joined ? <Plus size={17} color={p.paper} /> : <Map size={17} color={p.paper} />} onPress={map} />
+    </View>
+    <View style={[s.between, { flexWrap: 'wrap', marginTop: 2 }]}><Text accessibilityRole="header" style={{ color: p.ink, fontSize: 19.2, fontWeight: '700' }}>함께 모은 핀</Text><Button title="지도에서 모아보기" variant="secondary" tone="plain" icon={<Map size={16} color={p.ink} />} onPress={map} /></View>
+    {!!error && <><Notice error>{error}</Notice><Button title="다시 시도" variant="secondary" onPress={() => setRevision(value => value + 1)} /></>}
+    {loading && <Text style={g.emptyText}>그룹 핀을 불러오는 중입니다.</Text>}
+    {!loading && !error && !posts.length && <View style={g.empty}><MapPin size={30} color={p.muted} strokeWidth={1.3} /><Empty title="아직 모은 핀이 없어요" description={joined ? '지도 탭에서 좋아하는 장소에 이 그룹의 첫 핀을 남겨보세요.' : '가입하고 이 그룹의 첫 장소를 소개해 보세요.'} /></View>}
+    {posts.length > 0 && <View onLayout={event => setGridWidth(event.nativeEvent.layout.width)} style={g.grid}>{posts.map(post => <View key={post.id} style={{ width: cardWidth ?? '100%' }}><PostCard post={post} /></View>)}</View>}
+  </Screen>;
 }
-
-function GroupSheet({ visible, title, onClose, children }: { visible: boolean; title: string; onClose: () => void; children: ReactNode }) {
-  return <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}><SafeAreaView style={styles.modal}><KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><View style={styles.modalHeader}><Text style={styles.cardTitle}>{title}</Text><Pressable accessibilityLabel="닫기" accessibilityRole="button" onPress={onClose} hitSlop={10}><X size={24} color={p.ink} /></Pressable></View><ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.modalBody}>{children}</ScrollView></KeyboardAvoidingView></SafeAreaView></Modal>
+function GroupInvitePanel({ groupId }: { groupId: string }) {
+  const [code, setCode] = useState('');
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [revision, setRevision] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    setCode(''); setError(''); setMessage('');
+    void getGroupInviteCode(groupId).then(next => { if (!cancelled) setCode(next); }, () => { if (!cancelled) setError('초대코드를 불러오지 못했습니다.'); });
+    return () => { cancelled = true; };
+  }, [groupId, revision]);
+  return <View style={g.invite}>
+    <View style={{ gap: 6 }}><View style={[s.row, { gap: 8 }]}><KeyRound size={17} color={p.ink} /><Text style={g.label}>그룹 초대코드</Text></View><Text style={g.note}>함께할 사람에게 이 코드를 알려주세요. 그룹 페이지에서 코드로 가입할 수 있어요.</Text></View>
+    {!!code && <View style={[s.row, { flexWrap: 'wrap', gap: 12 }]}><Text selectable style={g.code}>{code.match(/.{4}/g)?.join('-')}</Text><Button title="코드 복사" variant="secondary" icon={<Copy size={16} color={p.ink} />} onPress={() => { void Clipboard.setStringAsync(code).then(() => setMessage('초대코드를 복사했습니다.')).catch(() => setMessage('복사하지 못했습니다. 표시된 코드를 선택해서 복사해 주세요.')); }} /></View>}
+    {!code && !error && <Text style={g.small}>초대코드를 불러오는 중…</Text>}
+    {!!error && <><Notice error>{error}</Notice><Button title="다시 시도" variant="secondary" onPress={() => setRevision(value => value + 1)} /></>}
+    {!!message && <Text accessibilityLiveRegion="polite" style={g.note}>{message}</Text>}
+  </View>;
 }
-function errorText(e: unknown) { return e instanceof Error ? e.message : '처리하지 못했습니다. 다시 시도해 주세요.' }
-
-const styles = StyleSheet.create({
-  hero: { paddingVertical: 22, gap: 12 }, heroIcon: { width: 58, height: 58, borderRadius: 20, backgroundColor: p.primarySoft, alignItems: 'center', justifyContent: 'center' },
-  heroTitle: { color: p.ink, fontWeight: '800', fontSize: 27, lineHeight: 36 }, description: { color: p.muted, fontSize: 14, lineHeight: 22 },
-  actions: { flexDirection: 'row', gap: 10, marginVertical: 10 }, row: { flexDirection: 'row', gap: 12, alignItems: 'center' },
-  groupCard: { backgroundColor: p.paper, borderWidth: 1, borderColor: p.line, borderRadius: 20, padding: 18, gap: 14, marginTop: 12 }, groupIcon: { backgroundColor: p.primarySoft, width: 48, height: 48, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
-  cardTitle: { color: p.ink, fontSize: 18, fontWeight: '700' }, small: { color: p.muted, fontSize: 12, lineHeight: 19 }, joined: { color: p.primary, fontSize: 12, fontWeight: '600' },
-  leave: { paddingVertical: 14, alignItems: 'center' }, sectionTitle: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 20, marginBottom: 16 },
-  modal: { flex: 1, backgroundColor: p.bg }, modalHeader: { padding: 22, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: p.line }, modalBody: { padding: 22, gap: 18, paddingBottom: 45 }, inviteCode: { color: p.primary, fontWeight: '800', fontSize: 28, letterSpacing: 3, textAlign: 'center', paddingVertical: 24 },
-})
+const g = StyleSheet.create({
+  flex: { flex: 1 },
+  intro: { paddingBottom: 32, gap: 24 },
+  introActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  introText: { color: p.muted, fontSize: 14, lineHeight: 25.2 },
+  eyebrow: { fontSize: 13, fontWeight: '700', color: p.primary },
+  title: { color: p.ink, fontSize: 28.8, fontWeight: '600', lineHeight: 37.44, letterSpacing: -1.3 },
+  homeTitle: { color: p.ink, fontSize: 25, fontWeight: '700', lineHeight: 32, letterSpacing: -0.6 },
+  note: { color: p.muted, fontSize: 13.9, lineHeight: 23.6 },
+  label: { color: p.ink, fontSize: 16, fontWeight: '700' }, small: { color: p.muted, fontSize: 13.12, lineHeight: 21 }, tiny: { color: p.muted, fontSize: 12, lineHeight: 18 },
+  modalActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  tools: { gap: 16, marginTop: 2 },
+  filters: { flexDirection: 'row' },
+  filter: { flex: 1, flexDirection: 'row', minHeight: 44, padding: 8, gap: 6, alignItems: 'center', justifyContent: 'center' },
+  count: { minWidth: 21, paddingHorizontal: 5, paddingVertical: 2, borderRadius: 11, overflow: 'hidden', textAlign: 'center', color: p.primary, backgroundColor: `${p.primary}12`, fontSize: 11.7 },
+  listRow: { flexDirection: 'row', alignItems: 'center', gap: 16, paddingVertical: 16 },
+  listMain: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'flex-start', gap: 16, paddingVertical: 12 },
+  listSymbol: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  listCopy: { flex: 1, minWidth: 0, gap: 4 },
+  listName: { color: p.ink, fontSize: 16, lineHeight: 24, fontWeight: '600' },
+  listDescription: { color: p.muted, fontSize: 14, lineHeight: 22 },
+  compactButton: { minHeight: 36, paddingVertical: 8, paddingHorizontal: 11 },
+  symbol: { width: 44, height: 44, borderRadius: 22, backgroundColor: p.primarySoft, alignItems: 'center', justifyContent: 'center' },
+  visibility: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12 }, radio: { width: 18, height: 18, borderRadius: 9, borderWidth: 1, borderColor: p.muted }, radioOn: { borderColor: p.primary, borderWidth: 5 },
+  empty: { alignItems: 'center', padding: 18, marginVertical: 30 }, emptyText: { color: p.muted, fontSize: 14, lineHeight: 25, textAlign: 'center', paddingVertical: 32 },
+  home: { paddingTop: 32, gap: 22 },
+  groupDescription: { color: p.muted, fontSize: 16, lineHeight: 28.8 },
+  homeFooter: { paddingTop: 18, gap: 14, flexWrap: 'wrap' },
+  pill: { minHeight: 24, paddingHorizontal: 9, paddingVertical: 3, borderRadius: 4, overflow: 'hidden', color: p.primary, backgroundColor: p.primarySoft, fontSize: 11.5, fontWeight: '600' },
+  participation: { paddingVertical: 16, paddingHorizontal: 20, gap: 18 },
+  invite: { padding: 20, gap: 14 },
+  code: { color: p.ink, backgroundColor: p.oliveSoft, padding: 12, borderRadius: 8, overflow: 'hidden', fontSize: 17, letterSpacing: 1.2 },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 24, rowGap: 32 },
+});

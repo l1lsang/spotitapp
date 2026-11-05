@@ -1,0 +1,16 @@
+{
+  "date": "2026-10-14",
+  "framework": "Expo 57 / React Native 0.86",
+  "reference": "User-supplied desktop Spotit project: design.md, tokens.css, src/styles/design-system.css",
+  "previous": {
+    "font": "platform defaults",
+    "palette": "warm cream / light teal",
+    "spacing": "mixed 12-18px"
+  },
+  "selected": {
+    "font": "Pretendard 1.3.9",
+    "palette": "reference OKLCH converted to native sRGB",
+    "spacing": "4px scale",
+    "motion": "press and focus feedback only"
+  }
+}

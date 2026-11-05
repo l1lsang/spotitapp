@@ -1,7 +1,8 @@
 const { createHash, randomBytes, timingSafeEqual } = require('node:crypto')
 const { onCall, HttpsError } = require('firebase-functions/v2/https')
-const { onDocumentWritten } = require('firebase-functions/v2/firestore')
+const { onDocumentCreated, onDocumentWritten } = require('firebase-functions/v2/firestore')
 const { defineSecret } = require('firebase-functions/params')
+const { logger } = require('firebase-functions')
 const admin = require('firebase-admin')
 const { Timestamp, FieldPath } = require('firebase-admin/firestore')
 
@@ -70,11 +71,21 @@ exports.adminLogout = onCall(options, async request => {
   return { ok: true }
 })
 
+// Reporters may only flag posts (and their comments) they are allowed to see.
+async function readablePost(postId, reporterUid) {
+  const post = (await db.doc(`posts/${postId}`).get()).data()
+  if (!post) throw new HttpsError('not-found', '핀을 찾을 수 없습니다.')
+  const follows = post.visibility === 'followers' && (await db.doc(`users/${post.uid}/followers/${reporterUid}`).get()).exists
+  const groupMember = post.visibility === 'group' && post.groupId && (await db.doc(`groups/${post.groupId}/members/${reporterUid}`).get()).exists
+  if (post.uid !== reporterUid && post.visibility !== 'public' && !follows && !groupMember) throw new HttpsError('permission-denied', '볼 수 있는 핀만 신고할 수 있습니다.')
+  return post
+}
+
 exports.submitModerationCase = onCall(options, async request => {
   const reporterUid = uid(request)
   const data = request.data || {}
   const kind = data.kind
-  if (!['pin', 'user', 'chat', 'photo', 'inquiry'].includes(kind)) throw new HttpsError('invalid-argument', '접수 유형을 확인해 주세요.')
+  if (!['pin', 'user', 'chat', 'comment', 'photo', 'inquiry'].includes(kind)) throw new HttpsError('invalid-argument', '접수 유형을 확인해 주세요.')
   const sourceKind = kind === 'photo' ? data.sourceKind : kind
   if (kind === 'photo' && !['pin', 'user', 'chat'].includes(sourceKind)) throw new HttpsError('invalid-argument', '사진이 포함된 콘텐츠를 확인해 주세요.')
   const photoUrl = kind === 'photo' ? text(data.photoUrl, '사진 주소', 4096) : ''
@@ -92,11 +103,7 @@ exports.submitModerationCase = onCall(options, async request => {
   let evidence = {}
   let messageId = ''
   if (sourceKind === 'pin') {
-    const post = (await db.doc(`posts/${targetId}`).get()).data()
-    if (!post) throw new HttpsError('not-found', '핀을 찾을 수 없습니다.')
-    const follows = post.visibility === 'followers' && (await db.doc(`users/${post.uid}/followers/${reporterUid}`).get()).exists
-    const groupMember = post.visibility === 'group' && post.groupId && (await db.doc(`groups/${post.groupId}/members/${reporterUid}`).get()).exists
-    if (post.uid !== reporterUid && post.visibility !== 'public' && !follows && !groupMember) throw new HttpsError('permission-denied', '볼 수 있는 핀만 신고할 수 있습니다.')
+    const post = await readablePost(targetId, reporterUid)
     targetUid = post.uid
     title = post.title || post.placeName || '핀 신고'
     evidence = { title, content: post.content || '', placeName: post.placeName || '', address: post.address || '', photoUrls: post.photoUrls || [], authorNickname: post.authorNickname || '', uid: post.uid }
@@ -124,6 +131,17 @@ exports.submitModerationCase = onCall(options, async request => {
       const messages = await db.collection(`chats/${targetId}/messages`).orderBy('createdAt', 'desc').limit(20).get()
       evidence = { messages: messages.docs.reverse().map(doc => ({ id: doc.id, uid: doc.data().uid, authorNickname: doc.data().authorNickname || '', content: doc.data().content || '', photoUrl: doc.data().photoUrl || '' })) }
     }
+  } else if (sourceKind === 'comment') {
+    const post = await readablePost(targetId, reporterUid)
+    const commentId = id(data.messageId)
+    const replyId = data.replyId ? id(data.replyId) : ''
+    const comment = (await db.doc(`posts/${targetId}/comments/${commentId}${replyId ? `/replies/${replyId}` : ''}`).get()).data()
+    if (!comment || comment.deleted) throw new HttpsError('not-found', '댓글을 찾을 수 없습니다.')
+    if (comment.uid === reporterUid) throw new HttpsError('invalid-argument', '본인의 댓글은 신고할 수 없습니다.')
+    messageId = replyId ? `${commentId}/${replyId}` : commentId
+    targetUid = comment.uid
+    title = `${replyId ? '답글' : '댓글'} · ${post.title || post.placeName || '기록'}`
+    evidence = { title: post.title || '', placeName: post.placeName || '', content: comment.content || '', authorNickname: comment.authorNickname || '', commentId, ...(replyId ? { replyId } : {}) }
   }
   if (kind === 'photo') {
     if (targetUid === reporterUid) throw new HttpsError('invalid-argument', '본인의 사진은 신고할 수 없습니다.')
@@ -140,12 +158,57 @@ exports.submitModerationCase = onCall(options, async request => {
     : kind === 'photo' ? hash(JSON.stringify([reporterUid, kind, sourceKind, targetId, messageId, photoUrl]))
     : hash(`${reporterUid}:${kind}:${targetId}:${messageId}`)
   const ref = db.doc(`moderationCases/${kind === 'inquiry' ? hash(reporterUid + ':' + dedupe) : dedupe}`)
-  return db.runTransaction(async tx => {
+  const result = await db.runTransaction(async tx => {
     if ((await tx.get(ref)).exists) return { id: ref.id, duplicate: true }
     tx.create(ref, { kind, ...(kind === 'photo' ? { sourceKind } : {}), targetId, targetUid, messageId, title, reason, details, evidence, reporterUid,
       reporterName: reporter?.nickname || '사용자', status: 'open', reply: '', note: '', createdAt: stamp(), updatedAt: stamp() })
     return { id: ref.id, duplicate: false }
   })
+  // The report itself is saved; a failed auto-hide check must not fail the reporter's request.
+  if (!result.duplicate && sourceKind === 'pin') await hideHeavilyReportedPin(targetId).catch(error => logger.error('Auto-hide check failed', { postId: targetId, error: error.message }))
+  return result
+})
+
+// A pin reported by this many different members is hidden until an operator reviews it.
+const AUTO_HIDE_REPORTERS = 3
+async function hideHeavilyReportedPin(postId) {
+  const reports = await db.collection('moderationCases').where('targetId', '==', postId).get()
+  const reporters = new Set(reports.docs.map(doc => doc.data()).filter(item => item.kind === 'pin' || item.sourceKind === 'pin').map(item => item.reporterUid))
+  if (reporters.size < AUTO_HIDE_REPORTERS) return
+  const postRef = db.doc(`posts/${postId}`)
+  const hiddenRef = db.doc(`moderationPosts/${postId}`)
+  const caseRef = db.doc(`moderationCases/auto_reports_${hash(postId)}`)
+  await db.runTransaction(async tx => {
+    const [post, hidden, existing] = await Promise.all([tx.get(postRef), tx.get(hiddenRef), tx.get(caseRef)])
+    if (!post.exists || hidden.exists) return
+    const data = post.data()
+    tx.set(hiddenRef, { post: data, hiddenAt: stamp(), caseId: caseRef.id, auto: true })
+    tx.delete(postRef)
+    const details = `서로 다른 이용자 ${reporters.size}명의 신고로 자동 숨김 처리되었습니다. 검토 후 '핀 복원'으로 되돌릴 수 있습니다.`
+    const evidence = { content: data.content || '', title: data.title || '', placeName: data.placeName || '', photoUrls: data.photoUrls || [], authorNickname: data.authorNickname || '' }
+    if (existing.exists) tx.update(caseRef, { status: 'open', details, evidence, lastAction: 'hide', updatedAt: stamp() })
+    else tx.create(caseRef, { kind: 'auto', targetId: postId, targetUid: data.uid, title: data.title || '자동 숨김 핀', reason: 'auto', details, evidence,
+      reporterUid: 'system', reporterName: '신고 누적 필터', status: 'open', reply: '', note: '', lastAction: 'hide', createdAt: stamp(), updatedAt: stamp() })
+  })
+}
+
+// Every block reaches the operator queue as a user case, so abusive accounts are reviewed.
+exports.forwardUserBlock = onDocumentCreated({ ...options, document: 'users/{blockerUid}/blocks/{blockedUid}' }, async event => {
+  const { blockerUid, blockedUid } = event.params
+  if (blockerUid === blockedUid) return
+  const [blocker, blocked] = await Promise.all([db.doc(`users/${blockerUid}`).get(), db.doc(`users/${blockedUid}`).get()])
+  const user = blocked.data() || {}
+  const ref = db.doc(`moderationCases/${hash(`${blockerUid}:block:${blockedUid}`)}`)
+  try {
+    await ref.create({ kind: 'user', targetId: blockedUid, targetUid: blockedUid, messageId: '', title: user.nickname || event.data?.data()?.nickname || '차단된 사용자',
+      reason: 'blocked', details: '이용자가 이 계정을 차단했습니다. 부적절한 행위 여부를 검토해 주세요.',
+      evidence: { nickname: user.nickname || '', username: user.username || '', bio: user.bio || '', photoUrls: user.photoURL ? [user.photoURL] : [] },
+      reporterUid: blockerUid, reporterName: blocker.data()?.nickname || '사용자', status: 'open', reply: '', note: '', createdAt: stamp(), updatedAt: stamp() })
+  } catch (error) {
+    if (error.code !== 6) throw error
+    // Blocked again after an unblock: reopen the earlier case for another look.
+    await ref.update({ status: 'open', details: '이용자가 이 계정을 다시 차단했습니다. 부적절한 행위 여부를 검토해 주세요.', updatedAt: stamp() })
+  }
 })
 
 exports.listMyModerationCases = onCall(options, async request => {
@@ -161,7 +224,7 @@ exports.adminListCases = onCall(options, async request => {
   await session(request)
   const kind = request.data?.kind || 'all'
   const status = request.data?.status || 'all'
-  if (!['all', 'pin', 'user', 'chat', 'photo', 'inquiry', 'auto'].includes(kind) || !['all', 'open', 'reviewing', 'resolved', 'dismissed'].includes(status)) throw new HttpsError('invalid-argument', '필터를 확인해 주세요.')
+  if (!['all', 'pin', 'user', 'chat', 'comment', 'photo', 'inquiry', 'auto'].includes(kind) || !['all', 'open', 'reviewing', 'resolved', 'dismissed'].includes(status)) throw new HttpsError('invalid-argument', '필터를 확인해 주세요.')
   let query = db.collection('moderationCases')
   if (kind !== 'all') query = query.where('kind', '==', kind)
   if (status !== 'all') query = query.where('status', '==', status)
@@ -254,8 +317,16 @@ exports.adminSearchUsers = onCall(options, async request => {
   if (!['nickname', 'username', 'email', 'uid'].includes(field)) throw new HttpsError('invalid-argument', '검색 항목을 확인해 주세요.')
   if (field === 'username') search = search.replace(/^@/, '').toLowerCase()
   let query = db.collection('users')
-  if (search) {
-    if (field === 'uid' || field === 'email') query = query.where(field, '==', search).orderBy(FieldPath.documentId())
+  if (search && field === 'email') {
+    // Sign-in emails live only in Firebase Authentication; profiles no longer keep them.
+    const account = await admin.auth().getUserByEmail(search).catch(error => {
+      if (error.code === 'auth/user-not-found' || error.code === 'auth/invalid-email') return null
+      throw error
+    })
+    if (!account) return { users: [], nextCursor: null }
+    query = query.where(FieldPath.documentId(), '==', account.uid)
+  } else if (search) {
+    if (field === 'uid') query = query.where(field, '==', search).orderBy(FieldPath.documentId())
     else query = query.orderBy(field).orderBy(FieldPath.documentId()).startAt(search).endAt(search + '\uf8ff')
   } else query = query.orderBy(FieldPath.documentId())
   if (request.data?.cursor) {
@@ -265,10 +336,12 @@ exports.adminSearchUsers = onCall(options, async request => {
   const snapshot = await query.limit(26).get()
   const docs = snapshot.docs.slice(0, 25)
   const states = docs.length ? await db.getAll(...docs.map(doc => db.doc(`moderationUsers/${doc.id}`))) : []
+  const accounts = docs.length ? (await admin.auth().getUsers(docs.map(doc => ({ uid: doc.id })))).users : []
+  const emails = new Map(accounts.map(account => [account.uid, account.email || '']))
   return { users: docs.map((doc, index) => {
     const user = doc.data()
     const state = states[index].data()
-    return serialize({ uid: doc.id, nickname: user.nickname || '', username: user.username || '', email: user.email || '', bio: user.bio || '', photoURL: user.photoURL || '', createdAt: user.createdAt || null, suspended: state?.suspended === true, suspensionReason: state?.reason || '' })
+    return serialize({ uid: doc.id, nickname: user.nickname || '', username: user.username || '', email: emails.get(doc.id) || user.email || '', bio: user.bio || '', photoURL: user.photoURL || '', createdAt: user.createdAt || null, suspended: state?.suspended === true, suspensionReason: state?.reason || '' })
   }), nextCursor: snapshot.size > 25 ? docs.at(-1).id : null }
 })
 

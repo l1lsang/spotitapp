@@ -8,6 +8,7 @@ export interface AuthContextValue {
   profileError: string
   loading: boolean
   firebaseReady: boolean
+  accountReady: boolean
   refreshProfile: () => Promise<void>
 }
 

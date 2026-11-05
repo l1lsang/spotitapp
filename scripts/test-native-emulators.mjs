@@ -18,16 +18,19 @@ const workspaceCache = join(root, '.verification.local', 'firebase-emulators')
 const cli = join(cliRoot, 'lib', 'bin', 'firebase.js')
 await access(cli)
 await access(join(javaHome, 'bin', 'java.exe'))
-const metadata = JSON.parse(await readFile(join(cliRoot, 'lib', 'emulator', 'downloadableEmulatorInfo.json'), 'utf8')).firestore
-assert.equal(metadata.version, '1.20.2', 'Review the installed emulator version before changing this runner')
-const sourceJar = join(homedir(), '.cache', 'firebase', 'emulators', metadata.downloadPathRelativeToCacheDir)
-// Use the already cached, checksum-verified binary; do not download anything.
-const digest = createHash('sha256')
-for await (const chunk of createReadStream(sourceJar)) digest.update(chunk)
-assert.equal(digest.digest('hex'), metadata.expectedChecksumSHA256, 'Cached emulator checksum does not match the installed Firebase CLI manifest')
+const manifest = JSON.parse(await readFile(join(cliRoot, 'lib', 'emulator', 'downloadableEmulatorInfo.json'), 'utf8'))
 await mkdir(workspaceConfig, { recursive: true })
 await mkdir(workspaceCache, { recursive: true })
-await copyFile(sourceJar, join(workspaceCache, metadata.downloadPathRelativeToCacheDir))
+for (const [name, version] of [['firestore', '1.20.2'], ['storage', '1.1.3']]) {
+  const metadata = manifest[name]
+  assert.equal(metadata.version, version, `Review the installed ${name} emulator version before changing this runner`)
+  const sourceJar = join(homedir(), '.cache', 'firebase', 'emulators', metadata.downloadPathRelativeToCacheDir)
+  // Use the already cached, checksum-verified binaries; do not download anything.
+  const digest = createHash('sha256')
+  for await (const chunk of createReadStream(sourceJar)) digest.update(chunk)
+  assert.equal(digest.digest('hex'), metadata.expectedChecksumSHA256, 'Cached emulator checksum does not match the installed Firebase CLI manifest')
+  await copyFile(sourceJar, join(workspaceCache, metadata.downloadPathRelativeToCacheDir))
+}
 
 const childEnv = {
   ...process.env,
@@ -51,7 +54,7 @@ delete childEnv.DEBUG
 console.log('Running demo-spotit-native with workspace-only CLI config and cached emulator.')
 const child = spawn(process.execPath, [
   cli, 'emulators:exec', '--non-interactive', '--config', 'backend/firebase.emulators.json',
-  '--only', 'auth,firestore', '--project', 'demo-spotit-native',
+  '--only', 'auth,firestore,storage', '--project', 'demo-spotit-native',
   'node --experimental-vm-modules --test tests/native-services.integration.test.mjs',
 ], { cwd: root, env: childEnv, stdio: 'inherit', windowsHide: true })
 child.on('error', error => { console.error(error.message); process.exitCode = 1 })

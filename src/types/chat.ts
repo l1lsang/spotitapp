@@ -6,6 +6,8 @@ export interface ChatParticipant {
   photoURL: string
 }
 
+export type ChatReactionEmoji = '👍' | '❤️' | '😂' | '😮' | '😢' | '🙏'
+
 export interface DaymarkChat {
   id: string
   kind?: 'direct' | 'group'
@@ -30,5 +32,6 @@ export interface ChatMessage {
   content: string
   photoUrl?: string
   photoName?: string
+  reactionsBy?: Record<string, ChatReactionEmoji>
   createdAt?: Timestamp
 }

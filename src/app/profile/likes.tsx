@@ -1,3 +1,3 @@
-import FeedScreen from '../../screens/FeedScreen';
-import {AuthGate} from '../../components/AuthGate';
-export default function Route(){return <AuthGate><FeedScreen kind="liked"/></AuthGate>;}
+import {Redirect} from 'expo-router';
+// Liked pins now live in the profile's 좋아요 tab.
+export default function Route(){return <Redirect href={{pathname:'/profile',params:{tab:'likes'}}}/>;}

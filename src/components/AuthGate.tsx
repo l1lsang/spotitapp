@@ -1,8 +1,8 @@
 import { useEffect, type PropsWithChildren } from "react";
 import { ActivityIndicator } from "react-native";
-import { router, usePathname } from "expo-router";
+import { Redirect, router, usePathname } from "expo-router";
 import { useAuth } from "../hooks/useAuth";
-import { Button, Empty, Notice, p, Screen } from "./ui";
+import { Button, Notice, p, Screen } from "./ui";
 export function AuthGate({ children }: PropsWithChildren) {
   const { currentUser, profile, profileError, loading, refreshProfile } =
     useAuth();
@@ -19,23 +19,7 @@ export function AuthGate({ children }: PropsWithChildren) {
     );
   if (!currentUser)
     return (
-      <Screen title="스팟잇">
-        <Empty
-          title="로그인하고 함께 기록해요"
-          description="계정을 연결하면 웹에서 남긴 기록도 이어서 볼 수 있어요."
-        />
-        <Button
-          title="로그인"
-          onPress={() =>
-            router.push({ pathname: "/login", params: { from: path } })
-          }
-        />
-        <Button
-          title="회원가입"
-          variant="secondary"
-          onPress={() => router.push("/signup")}
-        />
-      </Screen>
+      <Redirect href={{ pathname: '/login', params: { from: path } }} />
     );
   if (profileError)
     return (

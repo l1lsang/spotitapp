@@ -11,14 +11,20 @@ import { requireAuth } from '../lib/firebase'
 import { getSignupRequirementsError, type SignupRequirements } from '../lib/signupRequirements'
 import { deleteUserAccountData, upsertUserProfile } from './userService'
 import { disablePushNotifications } from './pushNotificationService'
+import { reauthenticateWithApple, signInWithApple } from './appleAuthService'
 
 export class AuthCancelledError extends Error {
   code = 'auth/cancelled'
   constructor() { super('로그인을 취소했습니다.') }
 }
 
-export function authErrorMessage(error: unknown, fallback = '잠시 후 다시 시도해 주세요.'): string {
+export type LoginProvider = 'email' | 'google' | 'kakao' | 'apple'
+
+export function authErrorMessage(error: unknown, fallback = '잠시 후 다시 시도해 주세요.', provider?: LoginProvider): string {
   const code = (error as { code?: string })?.code || ''
+  if (provider && provider !== 'email' && ['auth/invalid-credential', 'auth/invalid-oauth-client-id', 'auth/missing-or-invalid-nonce'].includes(code)) {
+    return `${provider === 'kakao' ? '카카오' : provider === 'apple' ? '애플' : '구글'} 인증을 확인하지 못했습니다. 다시 로그인해 주세요.`
+  }
   const messages: Record<string, string> = {
     'auth/invalid-email': '올바른 이메일 주소를 입력해 주세요.',
     'auth/invalid-credential': '이메일 또는 비밀번호를 확인해 주세요.',
@@ -31,12 +37,14 @@ export function authErrorMessage(error: unknown, fallback = '잠시 후 다시 �
     'auth/account-exists-with-different-credential': '같은 이메일로 가입한 계정이 있습니다. 기존 로그인 방법을 이용해 주세요.',
     'auth/requires-recent-login': '계정 보호를 위해 다시 인증한 뒤 탈퇴해 주세요.',
     'auth/operation-not-allowed': '이 로그인 방법은 아직 준비되지 않았습니다. 이메일 로그인을 이용해 주세요.',
+    'auth/popup-blocked': '로그인 창이 차단되었습니다. 브라우저의 팝업을 허용한 뒤 다시 시도해 주세요.',
+    'auth/user-mismatch': '현재 로그인한 계정과 같은 계정으로 인증해 주세요.',
   }
   return messages[code] || (error instanceof Error ? error.message : fallback)
 }
 
 function assertNativeProvider() {
-  if (Constants.appOwnership === 'expo') throw new Error('소셜 로그인은 설치된 스팟잇 앱에서 이용할 수 있습니다. 현재는 이메일로 로그인해 주세요.')
+  if (Constants.appOwnership === 'expo') throw new Error('소셜 로그인은 설치된 피노리 앱에서 이용할 수 있습니다. 현재는 이메일로 로그인해 주세요.')
 }
 
 let googleConfigured = false
@@ -56,18 +64,28 @@ async function googleCredential(): Promise<AuthCredential> {
   return GoogleAuthProvider.credential(result.data.idToken)
 }
 
-async function kakaoCredential(): Promise<AuthCredential> {
+async function nativeKakaoLogin(reauthenticate = false) {
   assertNativeProvider()
   if (!process.env.EXPO_PUBLIC_KAKAO_NATIVE_APP_KEY) throw new Error('카카오 로그인이 아직 준비되지 않았습니다. 이메일로 로그인해 주세요.')
-  const { login } = await import('@react-native-seoul/kakao-login')
+  const { exchangeKakaoToken } = await import('./kakaoAuthService')
+  const { login, loginWithKakaoAccount } = await import('@react-native-seoul/kakao-login')
   const rawNonce = `${randomUUID()}${randomUUID()}`
   const nonce = await digestStringAsync(CryptoDigestAlgorithm.SHA256, rawNonce)
   const token = await login({ nonce })
   if (!token.idToken) throw new Error('카카오 인증 정보를 받지 못했습니다. 다른 로그인 방법을 이용해 주세요.')
-  // Enable Kakao OIDC and configure the Firebase provider to accept the native
-  // application's token audience. Never embed a client secret in this app.
-  return new OAuthProvider(process.env.EXPO_PUBLIC_FIREBASE_KAKAO_PROVIDER_ID || 'oidc.kakao')
-    .credential({ idToken: token.idToken, rawNonce })
+  // The native token audience differs from the existing web OIDC client ID.
+  // The server validates it and resolves the same linked Firebase account.
+  try { return await exchangeKakaoToken(token.idToken, rawNonce, reauthenticate) }
+  catch (error) {
+    // Older Android SDK builds dropped nonce in the KakaoTalk path. Use the
+    // account flow once in that case; never skip nonce verification.
+    if ((error as { details?: { reason?: string } }).details?.reason !== 'nonce-mismatch') throw error
+    const retryRawNonce = `${randomUUID()}${randomUUID()}`
+    const retryNonce = await digestStringAsync(CryptoDigestAlgorithm.SHA256, retryRawNonce)
+    const retryToken = await loginWithKakaoAccount({ nonce: retryNonce })
+    if (!retryToken.idToken) throw new Error('카카오 인증 정보를 받지 못했습니다. 다시 로그인해 주세요.')
+    return exchangeKakaoToken(retryToken.idToken, retryRawNonce, reauthenticate)
+  }
 }
 
 export async function signupWithEmail(
@@ -96,7 +114,7 @@ export async function sendPasswordReset(email: string): Promise<void> {
 export async function loginWithKakao(): Promise<User> {
   const credential = Platform.OS === 'web'
     ? await signInWithPopup(requireAuth(), new OAuthProvider(process.env.EXPO_PUBLIC_FIREBASE_KAKAO_PROVIDER_ID || 'oidc.kakao'))
-    : await signInWithCredential(requireAuth(), await kakaoCredential())
+    : await nativeKakaoLogin()
   await upsertUserProfile(credential.user)
 
   return credential.user
@@ -108,6 +126,12 @@ export async function loginWithGoogle(): Promise<User> {
     : await signInWithCredential(requireAuth(), await googleCredential())
   await upsertUserProfile(credential.user)
   return credential.user
+}
+
+export async function loginWithApple(): Promise<User> {
+  const user = await signInWithApple()
+  await upsertUserProfile(user)
+  return user
 }
 
 export async function logout(): Promise<void> {
@@ -134,11 +158,16 @@ export async function reauthenticateAccount(user: User, password?: string): Prom
       const { reauthenticateWithPopup } = await import('firebase/auth')
       await reauthenticateWithPopup(user, new GoogleAuthProvider())
     } else await reauthenticateWithCredential(user, await googleCredential())
+  } else if (providers.includes('apple.com')) {
+    await reauthenticateWithApple(user)
   } else if (providers.some(id => id.startsWith('oidc.'))) {
     if (Platform.OS === 'web') {
       const { reauthenticateWithPopup } = await import('firebase/auth')
       await reauthenticateWithPopup(user, new OAuthProvider(process.env.EXPO_PUBLIC_FIREBASE_KAKAO_PROVIDER_ID || 'oidc.kakao'))
-    } else await reauthenticateWithCredential(user, await kakaoCredential())
+    } else {
+      if (requireAuth().currentUser?.uid !== user.uid) throw new Error('다시 로그인한 뒤 인증해 주세요.')
+      await nativeKakaoLogin(true)
+    }
   } else {
     const error = new Error('로그아웃 후 다시 로그인하고 탈퇴해 주세요.')
     Object.assign(error, { code: 'auth/requires-recent-login' })
@@ -147,8 +176,16 @@ export async function reauthenticateAccount(user: User, password?: string): Prom
 }
 
 export async function deleteAccount(user: User): Promise<void> {
+  // A custom-token reauthentication replaces Firebase's User instance. Use the
+  // refreshed session only when it still belongs to the requested account.
+  const currentUser = requireAuth().currentUser
+  if (!currentUser || currentUser.uid !== user.uid) {
+    const error = new Error('계정 보호를 위해 다시 인증한 뒤 탈퇴해 주세요.')
+    Object.assign(error, { code: 'auth/requires-recent-login' })
+    throw error
+  }
   // Validate recent authentication before deleting any profile data.
-  const token = await user.getIdTokenResult(true)
+  const token = await currentUser.getIdTokenResult(true)
   const authenticatedAt = Date.parse(token.authTime)
   if (!Number.isFinite(authenticatedAt) || Date.now() - authenticatedAt > 4 * 60_000) {
     const error = new Error('계정 보호를 위해 다시 인증한 뒤 탈퇴해 주세요.')
@@ -157,5 +194,5 @@ export async function deleteAccount(user: User): Promise<void> {
   }
   await disablePushNotifications(user.uid)
   await deleteUserAccountData(user.uid)
-  await deleteUser(user)
+  await deleteUser(currentUser)
 }

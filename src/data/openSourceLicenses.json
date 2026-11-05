@@ -1,7 +1,7 @@
 {
   "sources": {
-    "package-lock.json": "f63951e0084c81aac564515087c4c00e619e49292adfc8d955070165e1d8592f",
-    "backend/functions/package-lock.json": "e3270ec8a57dfa02c681794beff1f5ebcf2674e7a52a3796410f1cd71bbb4f4d"
+    "package-lock.json": "97926f63a1c4c7ecc76b2d92fb9de7d18b1fbbf6a45fdc1f0cc91e36a16c9c3e",
+    "backend/functions/package-lock.json": "3faa4e1c847eb90d03df57f5fad9a8c219a0eed767aae0d86b70731b52fcb6b5"
   },
   "packages": [
     {
@@ -19,6 +19,24 @@
           "title": "src/community/segmented-control/vendor/LICENSE",
           "textId": "212dbf14b113759356207347826f21ac3c81151943fdb89ce25da5dc6214831c",
           "source": "@expo/ui@57.0.18/src/community/segmented-control/vendor/LICENSE"
+        }
+      ]
+    },
+    {
+      "name": "@invertase/react-native-apple-authentication",
+      "version": "2.5.1",
+      "license": "Apache-2.0",
+      "integrity": "sha512-KPKKc0wtRYpH4J0RkDfHzoKSZ+dYPEHmCXhpPdgHsT2MbK5AIkW1cYurjhAgev/kL7nOHFmWITjY1At5WhFEMQ==",
+      "scopes": [
+        "app"
+      ],
+      "direct": true,
+      "repository": "https://github.com/invertase/react-native-apple-authentication",
+      "documents": [
+        {
+          "title": "LICENSE",
+          "textId": "d1d91013bad44a8e9205add3f028f1a3343d1e4856bbbdb38802b02787ad147d",
+          "source": "@invertase/react-native-apple-authentication@2.5.1/LICENSE"
         }
       ]
     },
@@ -109,6 +127,42 @@
           "title": "LICENSE",
           "textId": "371567d5d8999eeffba61ddbcb60ffbe4f25c3f165f1772e2c66befd0251bffa",
           "source": "expo@57.0.22/LICENSE"
+        }
+      ]
+    },
+    {
+      "name": "expo-apple-authentication",
+      "version": "57.0.2",
+      "license": "MIT",
+      "integrity": "sha512-00KnlyRceRKski+ljZz8q8JhJZ4D3ZScU+Y0RqS6ElJ8GaCWfd7Qh5tMr47yIU/dKDrOnkzkFUM+6vyHS5HI7Q==",
+      "scopes": [
+        "app"
+      ],
+      "direct": true,
+      "repository": "https://github.com/expo/expo",
+      "documents": [
+        {
+          "title": "LICENSE",
+          "textId": "371567d5d8999eeffba61ddbcb60ffbe4f25c3f165f1772e2c66befd0251bffa",
+          "source": "expo-apple-authentication@57.0.2/LICENSE"
+        }
+      ]
+    },
+    {
+      "name": "expo-application",
+      "version": "57.0.3",
+      "license": "MIT",
+      "integrity": "sha512-t/CxeLio0NjY9/cOak1tQp62/hAUjzJxmhR4rVUR7K5bb9YoEtfl1ZekTn+Iuh+dYOMYzF0l72ODMSmY3CR1NA==",
+      "scopes": [
+        "app"
+      ],
+      "direct": true,
+      "repository": "https://github.com/expo/expo",
+      "documents": [
+        {
+          "title": "LICENSE",
+          "textId": "371567d5d8999eeffba61ddbcb60ffbe4f25c3f165f1772e2c66befd0251bffa",
+          "source": "expo-application@57.0.3/LICENSE"
         }
       ]
     },
@@ -347,6 +401,24 @@
       ]
     },
     {
+      "name": "expo-linear-gradient",
+      "version": "57.0.2",
+      "license": "MIT",
+      "integrity": "sha512-eGNSfcbdXYvw0B/TQ3nmXKQgj0jLUi3EgsXGlvI79rlXg5RR5dQTkY2yqkf7BQDM3PMd3tqBMZdsLhvBqSUaMg==",
+      "scopes": [
+        "app"
+      ],
+      "direct": true,
+      "repository": "https://github.com/expo/expo",
+      "documents": [
+        {
+          "title": "LICENSE",
+          "textId": "371567d5d8999eeffba61ddbcb60ffbe4f25c3f165f1772e2c66befd0251bffa",
+          "source": "expo-linear-gradient@57.0.2/LICENSE"
+        }
+      ]
+    },
+    {
       "name": "expo-linking",
       "version": "57.0.10",
       "license": "MIT",
@@ -379,6 +451,24 @@
           "title": "LICENSE",
           "textId": "371567d5d8999eeffba61ddbcb60ffbe4f25c3f165f1772e2c66befd0251bffa",
           "source": "expo-location@57.0.17/LICENSE"
+        }
+      ]
+    },
+    {
+      "name": "expo-modules-core",
+      "version": "57.0.18",
+      "license": "MIT",
+      "integrity": "sha512-ovB7C+GVQTlKAOIsOIHJVVXN9Mn0ljf2SYBS+afrRaGqq+HZEn1D3o+HReIVeH1NjCn/xDBb7I4HjldHs6luZA==",
+      "scopes": [
+        "app"
+      ],
+      "direct": true,
+      "repository": "https://github.com/expo/expo",
+      "documents": [
+        {
+          "title": "LICENSE",
+          "textId": "371567d5d8999eeffba61ddbcb60ffbe4f25c3f165f1772e2c66befd0251bffa",
+          "source": "expo-modules-core@57.0.18/LICENSE"
         }
       ]
     },
@@ -645,6 +735,42 @@
       ]
     },
     {
+      "name": "jose",
+      "version": "4.15.9",
+      "license": "MIT",
+      "integrity": "sha512-1vUQX+IdDMVPj4k8kOxgUqlcK518yluMuGZwqlr44FS1ppZB/5GWh4rZG89erpOBOJjU/OBsnCVFfapsRz6nEA==",
+      "scopes": [
+        "server"
+      ],
+      "direct": true,
+      "repository": "panva/jose",
+      "documents": [
+        {
+          "title": "LICENSE.md",
+          "textId": "d6f4fc856b9900ac2bb491c9c82cfbb5ff8d9b8fb3d22c7dc47dd5ac644c79c4",
+          "source": "jose@4.15.9/LICENSE.md"
+        }
+      ]
+    },
+    {
+      "name": "jose",
+      "version": "6.2.12",
+      "license": "MIT",
+      "integrity": "sha512-9NiFmJEex0sy2Dk58j2UGBSHgUs2ypF9eZSu4L6vjOX3Dp96Sw1F3uL+H+D1sx02jZZdzUT0HgvCy59CuvXcWw==",
+      "scopes": [
+        "server"
+      ],
+      "direct": true,
+      "repository": "panva/jose",
+      "documents": [
+        {
+          "title": "LICENSE.md",
+          "textId": "d6f4fc856b9900ac2bb491c9c82cfbb5ff8d9b8fb3d22c7dc47dd5ac644c79c4",
+          "source": "jose@6.2.12/LICENSE.md"
+        }
+      ]
+    },
+    {
       "name": "lucide-react-native",
       "version": "1.45.0",
       "license": "ISC",
@@ -736,6 +862,24 @@
           "title": "LICENSE",
           "textId": "cf926c5c74ae12435b1cbe9be06ddf6cb10a0db5d9c03b089041bb30aae945f6",
           "source": "react-native-gesture-handler@2.32.0/LICENSE"
+        }
+      ]
+    },
+    {
+      "name": "react-native-keyboard-controller",
+      "version": "1.21.9",
+      "license": "MIT",
+      "integrity": "sha512-+TkkFldht4+AXBQeDy1hLE7iqiW8/NkY/ekhcFsKIiRdI9qC5JDzx0TfAg1iYZB2IeOXppmURIy2jFCUjOcV1w==",
+      "scopes": [
+        "app"
+      ],
+      "direct": true,
+      "repository": "https://github.com/kirillzyusko/react-native-keyboard-controller",
+      "documents": [
+        {
+          "title": "LICENSE",
+          "textId": "53a5febacd8d261babd140312796e68df45114d84f48f69f7084999b318c85d5",
+          "source": "react-native-keyboard-controller@1.21.9/LICENSE"
         }
       ]
     },
@@ -9520,24 +9664,6 @@
       ]
     },
     {
-      "name": "expo-application",
-      "version": "57.0.3",
-      "license": "MIT",
-      "integrity": "sha512-t/CxeLio0NjY9/cOak1tQp62/hAUjzJxmhR4rVUR7K5bb9YoEtfl1ZekTn+Iuh+dYOMYzF0l72ODMSmY3CR1NA==",
-      "scopes": [
-        "app"
-      ],
-      "direct": false,
-      "repository": "https://github.com/expo/expo",
-      "documents": [
-        {
-          "title": "LICENSE",
-          "textId": "371567d5d8999eeffba61ddbcb60ffbe4f25c3f165f1772e2c66befd0251bffa",
-          "source": "expo-application@57.0.3/LICENSE"
-        }
-      ]
-    },
-    {
       "name": "expo-asset",
       "version": "57.0.17",
       "license": "MIT",
@@ -9696,24 +9822,6 @@
           "title": "LICENSE",
           "textId": "371567d5d8999eeffba61ddbcb60ffbe4f25c3f165f1772e2c66befd0251bffa",
           "source": "expo-modules-autolinking@57.0.13/LICENSE"
-        }
-      ]
-    },
-    {
-      "name": "expo-modules-core",
-      "version": "57.0.18",
-      "license": "MIT",
-      "integrity": "sha512-ovB7C+GVQTlKAOIsOIHJVVXN9Mn0ljf2SYBS+afrRaGqq+HZEn1D3o+HReIVeH1NjCn/xDBb7I4HjldHs6luZA==",
-      "scopes": [
-        "app"
-      ],
-      "direct": false,
-      "repository": "https://github.com/expo/expo",
-      "documents": [
-        {
-          "title": "LICENSE",
-          "textId": "371567d5d8999eeffba61ddbcb60ffbe4f25c3f165f1772e2c66befd0251bffa",
-          "source": "expo-modules-core@57.0.18/LICENSE"
         }
       ]
     },
@@ -11456,24 +11564,6 @@
         }
       ],
       "noticeBasis": "installed-declaration-and-source-headers"
-    },
-    {
-      "name": "jose",
-      "version": "4.15.9",
-      "license": "MIT",
-      "integrity": "sha512-1vUQX+IdDMVPj4k8kOxgUqlcK518yluMuGZwqlr44FS1ppZB/5GWh4rZG89erpOBOJjU/OBsnCVFfapsRz6nEA==",
-      "scopes": [
-        "server"
-      ],
-      "direct": false,
-      "repository": "panva/jose",
-      "documents": [
-        {
-          "title": "LICENSE.md",
-          "textId": "d6f4fc856b9900ac2bb491c9c82cfbb5ff8d9b8fb3d22c7dc47dd5ac644c79c4",
-          "source": "jose@4.15.9/LICENSE.md"
-        }
-      ]
     },
     {
       "name": "js-tokens",
@@ -19626,6 +19716,7 @@
     "5333073a403d2b8ed244e5e9008ae8ee2cd825af74a7eaaf86343603588bd3b3": "/**\n * Copyright (c) Meta Platforms, Inc. and affiliates.\n *\n * This source code is licensed under the MIT license found in the\n * LICENSE file in the root directory of this source tree.\n *\n * @generated SignedSource<<e0d2ed06b7508b8127df565e426e1352>>\n *\n * This file was translated from Flow by scripts/js-api/build-types/index.js.\n * Original file: packages/virtualized-lists/Lists/StateSafePureComponent.js\n */",
     "53361a299f97e7ebb2b5e5331e2192ca8868e0f900abbf77b828dc576ac2869f": "/**\n * Copyright (c) Meta Platforms, Inc. and affiliates.\n *\n * This source code is licensed under the MIT license found in the\n * LICENSE file in the root directory of this source tree.\n *\n * @noformat\n * @oncall react_native\n * @generated SignedSource<<48a23e4247062bad5de7d29f42741be4>>\n *\n * This file was translated from Flow by scripts/generateTypeScriptDefinitions.js\n * Original file: packages/metro-cache-key/src/index.js\n * To regenerate, run:\n *   js1 build metro-ts-defs (internal) OR\n *   yarn run build-ts-defs (OSS) \n */",
     "5347055771fa66149a2e0baf46297aa926f3f0102fdaa9f5618bf0d5ac57033f": "{\n  \"name\": \"@react-native/metro-config\",\n  \"version\": \"0.86.3\",\n  \"license\": \"MIT\",\n  \"repository\": {\n    \"type\": \"git\",\n    \"url\": \"git+https://github.com/react/react-native.git\",\n    \"directory\": \"packages/metro-config\"\n  }\n}",
+    "53a5febacd8d261babd140312796e68df45114d84f48f69f7084999b318c85d5": "MIT License\n\nCopyright (c) 2021 Kiryl Ziusko\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.",
     "53b9e90a4bb6e03bf08484f390139f3a134f36b9160413ab8e41ff748dddd898": "{\n  \"name\": \"boolbase\",\n  \"version\": \"1.0.0\",\n  \"license\": \"ISC\",\n  \"author\": \"Felix Boehm <me@feedic.com>\",\n  \"repository\": {\n    \"type\": \"git\",\n    \"url\": \"https://github.com/fb55/boolbase\"\n  }\n}",
     "53f8bd7d5692983ba546ec31d1cbfaaee6d1e03caf69908458e41b54d6febe22": "/**\n * Copyright (c) Meta Platforms, Inc. and affiliates.\n *\n * This source code is licensed under the MIT license found in the\n * LICENSE file in the root directory of this source tree.\n *\n * @noformat\n * @oncall react_native\n * @generated SignedSource<<7b35f4001b105ee1f3612e8a0027a482>>\n *\n * This file was translated from Flow by scripts/generateTypeScriptDefinitions.js\n * Original file: packages/metro-transform-plugins/src/addParamsToDefineCall.js\n * To regenerate, run:\n *   js1 build metro-ts-defs (internal) OR\n *   yarn run build-ts-defs (OSS) \n */",
     "5438cbe481a1bfbbb16e7f78d10b6a9789145ba330ee5c1f1f68a1cc6b6b9753": "/**\n * Copyright (c) Meta Platforms, Inc. and affiliates.\n *\n * This source code is licensed under the MIT license found in the\n * LICENSE file in the root directory of this source tree.\n *\n * @noformat\n * @oncall react_native\n * @generated SignedSource<<165882da0b131608da36b1cbd00ecf28>>\n *\n * This file was translated from Flow by scripts/generateTypeScriptDefinitions.js\n * Original file: packages/metro-transform-worker/src/index.js\n * To regenerate, run:\n *   js1 build metro-ts-defs (internal) OR\n *   yarn run build-ts-defs (OSS) \n */",
@@ -19977,6 +20068,7 @@
     "d134a78b672ddb0a9fefc51b7e47958c04b55a74ac6450a3aed664ed779ed0b0": "MIT License\n\nCopyright (c) Nicolas Gallagher\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.",
     "d186e3d611e7518e380bea29c3e08e7ef60fabcfbb7cf915bb99055b67de5f47": "{\n  \"name\": \"bser\",\n  \"version\": \"2.1.1\",\n  \"license\": \"Apache-2.0\",\n  \"author\": \"Wez Furlong <wez@fb.com> (http://wezfurlong.org)\",\n  \"repository\": {\n    \"type\": \"git\",\n    \"url\": \"https://github.com/facebook/watchman\"\n  }\n}",
     "d1c9310266b76e40d988fb338efb4e6b2278e2f5f26063454a086e65276c14e4": "/**\n * Copyright (c) Meta Platforms, Inc. and affiliates.\n *\n * This source code is licensed under the MIT license found in the\n * LICENSE file in the root directory of this source tree.\n *\n * @flow strict-local\n * @format\n */",
+    "d1d91013bad44a8e9205add3f028f1a3343d1e4856bbbdb38802b02787ad147d": "Apache-2.0 License\n------------------\n\nCopyright (c) 2016-present Invertase Limited <oss@invertase.io> & Contributors\n\nLicensed under the Apache License, Version 2.0 (the \"License\");\nyou may not use this library except in compliance with the License.\n\nYou may obtain a copy of the Apache-2.0 License at\n\n    http://www.apache.org/licenses/LICENSE-2.0\n\nUnless required by applicable law or agreed to in writing, software\ndistributed under the License is distributed on an \"AS IS\" BASIS,\nWITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\nSee the License for the specific language governing permissions and\nlimitations under the License.\n\n\nCreative Commons Attribution 3.0 License\n----------------------------------------\n\nCopyright (c) 2016-present Invertase Limited <oss@invertase.io> & Contributors\n\nDocumentation and other instructional materials provided for this project\n(including on a separate documentation repository or it's documentation website) are\nlicensed under the Creative Commons Attribution 3.0 License. Code samples/blocks\ncontained therein are licensed under the Apache License, Version 2.0 (the \"License\"), as above.\n\nYou may obtain a copy of the Creative Commons Attribution 3.0 License at\n\n    https://creativecommons.org/licenses/by/3.0/",
     "d1ed413b641003aa4349be003ac18ed0f60497a5a166b26e417e3a1143d10bdb": "/**\n * Copyright (c) Meta Platforms, Inc. and affiliates.\n *\n * This source code is licensed under the MIT license found in the\n * LICENSE file in the root directory of this source tree.\n *\n * @noformat\n * @generated SignedSource<<1f73acbbf5a206de52478c57c058ccb8>>\n *\n * This file was translated from Flow by scripts/generateTypeScriptDefinitions.js\n * Original file: packages/metro-transform-plugins/src/inline-requires-plugin.js\n * To regenerate, run:\n *   js1 build metro-ts-defs (internal) OR\n *   yarn run build-ts-defs (OSS) \n */",
     "d1fc27d7c8c786069c170769701e4c3f73a1d066e94e4eb3853f49a1a78311f9": "{\n  \"name\": \"@firebase/app-check\",\n  \"version\": \"0.13.1\",\n  \"license\": \"Apache-2.0\",\n  \"author\": \"Firebase <firebase-support@google.com> (https://firebase.google.com/)\",\n  \"repository\": {\n    \"directory\": \"packages/app-check\",\n    \"type\": \"git\",\n    \"url\": \"git+https://github.com/firebase/firebase-js-sdk.git\"\n  }\n}",
     "d28e1b882eccb157921b35b4dc30e4fe83eba6690224829c107a5721111faf65": "Copyright (c) 2015, Rebecca Turner\n\nPermission to use, copy, modify, and/or distribute this software for any\npurpose with or without fee is hereby granted, provided that the above\ncopyright notice and this permission notice appear in all copies.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH\nREGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND\nFITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,\nINDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM\nLOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR\nOTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR\nPERFORMANCE OF THIS SOFTWARE.",

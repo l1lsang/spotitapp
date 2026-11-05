@@ -2,10 +2,14 @@ import type { User as FirebaseUser } from 'firebase/auth'
 import {
   collection,
   collectionGroup,
+  deleteField,
   doc,
+  documentId,
+  FieldPath,
   getDoc,
   getDocs,
   increment,
+  limit,
   query,
   runTransaction,
   serverTimestamp,
@@ -20,6 +24,7 @@ import { requireDb } from '../lib/firebase'
 import { appReadCache, invalidateAppReads } from '../lib/readCache'
 import { getSignupRequirementsError, SIGNUP_POLICY_VERSION, type SignupRequirements } from '../lib/signupRequirements'
 import { BIO_MAX_LENGTH, NICKNAME_MAX_LENGTH, createRandomUsername, getUsernameError, normalizeUsername } from '../lib/userProfile'
+import { getUserSearchProbe, normalizeUserSearch, rankUserSearchResults } from '../lib/userSearch'
 import type { DaymarkUser } from '../types/user'
 import { getPinThemeError, normalizePinColor, type PinTheme } from '../types/post'
 import { setGroupMembership } from './groupService'
@@ -27,7 +32,7 @@ import { setGroupMembership } from './groupService'
 type BatchOperation = (batch: WriteBatch) => void
 
 export function getFallbackNickname(user: Pick<FirebaseUser, 'displayName'>): string {
-  return user.displayName?.trim() || '스팟잇 사용자'
+  return user.displayName?.trim() || '피노리 사용자'
 }
 
 export async function getUserProfile(uid: string, fresh = false): Promise<DaymarkUser | null> {
@@ -61,9 +66,9 @@ export async function upsertUserProfile(user: FirebaseUser): Promise<DaymarkUser
     const migrated = await runTransaction(db, async (transaction) => {
       const snapshot = await transaction.get(userRef)
       if (!snapshot.exists()) {
+        // Profiles are readable by every member, so the sign-in email stays in Firebase Auth only.
         transaction.set(userRef, {
           uid: user.uid,
-          email: user.email || '',
           photoURL: user.photoURL || '',
           nickname: getFallbackNickname(user),
           bio: '',
@@ -211,12 +216,33 @@ export async function saveUserPinTheme(uid: string, theme: PinTheme): Promise<vo
   invalidateAppReads()
 }
 
-export async function listUsers(): Promise<DaymarkUser[]> {
-  return appReadCache.read('users', async () => {
-    const snapshot = await getDocs(collection(requireDb(), 'users'))
-    return snapshot.docs.map((userDoc) => userDoc.data() as DaymarkUser)
+const USER_SEARCH_CANDIDATES = 60
+const USER_SEARCH_RESULTS = 20
+
+// Finds a query anywhere in a nickname or username through the server-built
+// searchTokens index, instead of downloading every profile.
+export async function searchUsers(keyword: string): Promise<DaymarkUser[]> {
+  const term = normalizeUserSearch(keyword)
+  if (!term) return []
+  return appReadCache.read(`users:search:${term}`, async () => {
+    const snapshot = await getDocs(query(collection(requireDb(), 'users'),
+      where('searchTokens', 'array-contains', getUserSearchProbe(term)), limit(USER_SEARCH_CANDIDATES)))
+    const users = snapshot.docs.map((userDoc) => ({ ...userDoc.data(), uid: userDoc.id }) as DaymarkUser)
       .filter((user) => user.onboardingComplete !== false)
+    return rankUserSearchResults(users, term).slice(0, USER_SEARCH_RESULTS)
   })
+}
+
+// Profiles for a known set of people, such as everyone the viewer follows.
+export async function getUsersByIds(uids: string[]): Promise<DaymarkUser[]> {
+  const ids = [...new Set(uids)]
+  const chunks: string[][] = []
+  for (let index = 0; index < ids.length; index += 30) chunks.push(ids.slice(index, index + 30))
+  const snapshots = await Promise.all(chunks.map((chunk) =>
+    getDocs(query(collection(requireDb(), 'users'), where(documentId(), 'in', chunk)))))
+  return snapshots.flatMap((snapshot) => snapshot.docs.map((userDoc) => ({ ...userDoc.data(), uid: userDoc.id }) as DaymarkUser))
+    .filter((user) => user.onboardingComplete !== false)
+    .sort((a, b) => (a.nickname || '').localeCompare(b.nickname || ''))
 }
 
 async function commitBatchOperations(db: Firestore, operations: BatchOperation[]): Promise<void> {
@@ -264,6 +290,7 @@ export async function deleteUserAccountData(uid: string): Promise<void> {
     chatsSnapshot,
     webTokensSnapshot,
     nativeTokensSnapshot,
+    blocksSnapshot,
   ] = await Promise.all([
       getDocs(collection(db, 'users', uid, 'followers')),
       getDocs(collection(db, 'users', uid, 'following')),
@@ -280,10 +307,11 @@ export async function deleteUserAccountData(uid: string): Promise<void> {
       process.env.EXPO_PUBLIC_EAS_PROJECT_ID
         ? getDocs(collection(db, 'users', uid, 'expoPushTokens'))
         : Promise.resolve({ docs: [] }),
+      getDocs(collection(db, 'users', uid, 'blocks')),
     ])
 
-  const myPostIds = new Set(postsSnapshot.docs.map((postDoc) => postDoc.id))
   webTokensSnapshot.docs.forEach(token => addDeleteOperation(operations, deletedPaths, token.ref))
+  blocksSnapshot.docs.forEach(block => addDeleteOperation(operations, deletedPaths, block.ref))
   nativeTokensSnapshot.docs.forEach(token => addDeleteOperation(operations, deletedPaths, token.ref))
 
   followersSnapshot.docs.forEach((followerDoc) => {
@@ -349,60 +377,13 @@ export async function deleteUserAccountData(uid: string): Promise<void> {
     })),
   )
 
+  // Other members' pins recount their likes and comments on the server once these are gone.
   commentReplyEntries.forEach(({ commentDoc, repliesSnapshot }) => {
-    const parentPostRef = commentDoc.ref.parent.parent
-
     repliesSnapshot.docs.forEach((replyDoc) => addDeleteOperation(operations, deletedPaths, replyDoc.ref))
     addDeleteOperation(operations, deletedPaths, commentDoc.ref)
-
-    if (parentPostRef && !myPostIds.has(parentPostRef.id)) {
-      operations.push((batch) =>
-        batch.update(parentPostRef, {
-          commentCount: increment(-((commentDoc.data().deleted ? 0 : 1) + ((commentDoc.data() as { replyCount?: number }).replyCount || 0))),
-          updatedAt: serverTimestamp(),
-        }),
-      )
-    }
   })
-
-  repliesSnapshot.docs.forEach((replyDoc) => {
-    const parentCommentRef = replyDoc.ref.parent.parent
-    const parentPostRef = parentCommentRef?.parent.parent
-
-    addDeleteOperation(operations, deletedPaths, replyDoc.ref)
-
-    if (
-      parentCommentRef &&
-      parentPostRef &&
-      !deletedPaths.has(parentCommentRef.path) &&
-      !myPostIds.has(parentPostRef.id)
-    ) {
-      operations.push((batch) => {
-        batch.update(parentCommentRef, {
-          replyCount: increment(-1),
-        })
-        batch.update(parentPostRef, {
-          commentCount: increment(-1),
-          updatedAt: serverTimestamp(),
-        })
-      })
-    }
-  })
-
-  likesSnapshot.docs.forEach((likeDoc) => {
-    const parentPostRef = likeDoc.ref.parent.parent
-
-    addDeleteOperation(operations, deletedPaths, likeDoc.ref)
-
-    if (parentPostRef && !myPostIds.has(parentPostRef.id)) {
-      operations.push((batch) =>
-        batch.update(parentPostRef, {
-          likeCount: increment(-1),
-          updatedAt: serverTimestamp(),
-        }),
-      )
-    }
-  })
+  repliesSnapshot.docs.forEach((replyDoc) => addDeleteOperation(operations, deletedPaths, replyDoc.ref))
+  likesSnapshot.docs.forEach((likeDoc) => addDeleteOperation(operations, deletedPaths, likeDoc.ref))
 
   await Promise.all(
     chatsSnapshot.docs.map(async (chatDoc) => {
@@ -424,9 +405,14 @@ export async function deleteUserAccountData(uid: string): Promise<void> {
       )
 
       messagesSnapshot.docs.forEach((messageDoc) => {
-        const message = messageDoc.data() as { uid?: string }
+        const message = messageDoc.data() as { uid?: string; reactionsBy?: Record<string, unknown> }
 
         if (message.uid !== uid) {
+          if (message.reactionsBy && Object.hasOwn(message.reactionsBy, uid)) {
+            operations.push((batch) =>
+              batch.update(messageDoc.ref, new FieldPath('reactionsBy', uid), deleteField()),
+            )
+          }
           return
         }
 
@@ -437,6 +423,7 @@ export async function deleteUserAccountData(uid: string): Promise<void> {
             content: '탈퇴한 사용자의 메시지입니다.',
             photoUrl: '',
             photoName: '',
+            reactionsBy: {},
           }),
         )
       })

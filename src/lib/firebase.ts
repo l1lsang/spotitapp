@@ -55,11 +55,11 @@ if (
   db &&
   storage
 ) {
-  connectAuthEmulator(auth, `http://${emulatorHost}:9099`, {
+  connectAuthEmulator(auth, `http://${emulatorHost}:${process.env.EXPO_PUBLIC_FIREBASE_AUTH_EMULATOR_PORT || '9099'}`, {
     disableWarnings: true,
   });
-  connectFirestoreEmulator(db, emulatorHost, 8080);
-  connectStorageEmulator(storage, emulatorHost, 9199);
+  connectFirestoreEmulator(db, emulatorHost, Number(process.env.EXPO_PUBLIC_FIRESTORE_EMULATOR_PORT || 8080));
+  connectStorageEmulator(storage, emulatorHost, Number(process.env.EXPO_PUBLIC_FIREBASE_STORAGE_EMULATOR_PORT || 9199));
 }
 export function requireAuth() {
   if (!auth) throw new Error(firebaseConfigMessage);

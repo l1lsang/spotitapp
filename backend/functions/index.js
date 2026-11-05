@@ -6,6 +6,12 @@ admin.initializeApp()
 
 Object.assign(exports, require('./moderation'))
 Object.assign(exports, require('./nativePush'))
+Object.assign(exports, require('./placeSearch'))
+Object.assign(exports, require('./kakaoAuth'))
+Object.assign(exports, require('./counters'))
+Object.assign(exports, require('./postCleanup'))
+Object.assign(exports, require('./userProfile'))
+Object.assign(exports, require('./postSearch'))
 
 const db = admin.firestore()
 const messaging = admin.messaging()
@@ -50,7 +56,7 @@ exports.sendPushForNotification = onDocumentCreated(
       return
     }
 
-    const title = notification.title || '스팟잇'
+    const title = notification.title || '피노리'
     const body = notification.message || '새 알림이 도착했습니다.'
     const href = notification.href || '/notifications'
     const invalidTokenRefs = []

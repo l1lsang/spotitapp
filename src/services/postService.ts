@@ -23,6 +23,8 @@ import {
   type Timestamp,
 } from 'firebase/firestore'
 import { requireDb } from '../lib/firebase'
+import { assertCleanContent } from '../lib/contentFilter'
+import { filterFeedPosts, getFeedSearchProbe, getFeedSearchTerms } from '../lib/feedSearch'
 import { appReadCache, invalidateAppReads } from '../lib/readCache'
 import { getProfilePinAccess, type ProfilePinAccess } from '../lib/profilePinAccess'
 import type { LatLng } from '../lib/mapLocation'
@@ -63,7 +65,8 @@ function toPost(
     return null
   }
 
-  const post = data as Omit<Post, 'id'> & { id?: string }
+  // The search index is only queried, so pins carry no copy of it through the app.
+  const { searchTokens: _searchTokens, ...post } = data as Omit<Post, 'id'> & { id?: string; searchTokens?: string[] }
 
   return {
     ...post,
@@ -153,40 +156,66 @@ function distanceKm(from: LatLng, to: LatLng): number {
 export interface PostPageCursor { createdAt: Timestamp; id: string }
 export interface VisiblePostPage { posts: Post[]; nextCursor: PostPageCursor | null }
 
-// Use five authors per query to leave room for account and follower rule reads.
+// The viewer's own pins, then the pins of everyone they follow, five authors per
+// query to leave room for account and follower rule reads.
+async function getFeedScopes(uid: string): Promise<QueryConstraint[][]> {
+  const followingIds = await appReadCache.read(`following:${uid}`, () => getFollowingIds(uid))
+  const authors = [...new Set(followingIds)].filter(id => id !== uid)
+  const scopes: QueryConstraint[][] = [[where('uid', '==', uid)]]
+  for (let index = 0; index < authors.length; index += 5) {
+    scopes.push([where('uid', 'in', authors.slice(index, index + 5)), where('visibility', 'in', ['followers', 'public'])])
+  }
+  return scopes
+}
+
+// Every scope with the same constraints, four queries at a time, newest first.
+async function queryFeedScopes(scopes: QueryConstraint[][], constraints: QueryConstraint[]): Promise<QueryDocumentSnapshot<DocumentData>[]> {
+  const snapshots: QueryDocumentSnapshot<DocumentData>[] = []
+  let nextScope = 0
+  await Promise.all(Array.from({ length: Math.min(4, scopes.length) }, async () => {
+    while (nextScope < scopes.length) {
+      const scope = scopes[nextScope++]
+      const snapshot = await getDocs(query(collection(requireDb(), 'posts'), ...scope, ...constraints))
+      snapshots.push(...snapshot.docs)
+    }
+  }))
+  return snapshots.sort((a, b) => {
+    const left = a.data().createdAt as Timestamp
+    const right = b.data().createdAt as Timestamp
+    return right.seconds - left.seconds || right.nanoseconds - left.nanoseconds || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0)
+  })
+}
+
 // A global timestamp + ID cursor keeps ties stable across all author batches.
 export async function getVisiblePostPage(uid: string, cursor: PostPageCursor | null = null, pageSize = 24): Promise<VisiblePostPage> {
   const count = Math.max(1, Math.min(80, Number.isFinite(pageSize) ? Math.floor(pageSize) : 80))
   const key = JSON.stringify(['feed', uid, cursor?.createdAt.seconds, cursor?.createdAt.nanoseconds, cursor?.id, count])
   return appReadCache.read(key, async () => {
-    const followingIds = await appReadCache.read(`following:${uid}`, () => getFollowingIds(uid))
-    const authors = [...new Set(followingIds)].filter(id => id !== uid)
-    const scopes: QueryConstraint[][] = [[where('uid', '==', uid)]]
-    for (let index = 0; index < authors.length; index += 5) {
-      scopes.push([where('uid', 'in', authors.slice(index, index + 5)), where('visibility', 'in', ['followers', 'public'])])
-    }
-    const snapshots: QueryDocumentSnapshot<DocumentData>[] = []
-    let nextScope = 0
-    await Promise.all(Array.from({ length: Math.min(4, scopes.length) }, async () => {
-      while (nextScope < scopes.length) {
-        const scope = scopes[nextScope++]
-        const snapshot = await getDocs(query(collection(requireDb(), 'posts'), ...scope,
-          orderBy('createdAt', 'desc'), orderBy(documentId(), 'desc'),
-          ...(cursor ? [startAfter(cursor.createdAt, cursor.id)] : []), limit(count + 1)))
-        snapshots.push(...snapshot.docs)
-      }
-    }))
-    snapshots.sort((a, b) => {
-      const left = a.data().createdAt as Timestamp
-      const right = b.data().createdAt as Timestamp
-      return right.seconds - left.seconds || right.nanoseconds - left.nanoseconds || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0)
-    })
+    const snapshots = await queryFeedScopes(await getFeedScopes(uid), [
+      orderBy('createdAt', 'desc'), orderBy(documentId(), 'desc'),
+      ...(cursor ? [startAfter(cursor.createdAt, cursor.id)] : []), limit(count + 1)])
     const page = snapshots.slice(0, count)
     const last = page.at(-1)
     return {
       posts: page.map(toPost).filter((post): post is Post => Boolean(post)),
       nextCursor: snapshots.length > count && last ? { createdAt: last.data().createdAt as Timestamp, id: last.id } : null,
     }
+  })
+}
+
+const POST_SEARCH_CANDIDATES = 60
+
+// Searches every pin the feed can show, not only the loaded pages, through the
+// server-built searchTokens index: the newest pins of each author batch that
+// contain the longest query word's first piece, kept if they contain every word.
+export async function searchVisiblePosts(uid: string, keyword: string): Promise<Post[]> {
+  const terms = getFeedSearchTerms(keyword)
+  if (!terms.length) return []
+  return appReadCache.read(JSON.stringify(['feed:search', uid, terms]), async () => {
+    const snapshots = await queryFeedScopes(await getFeedScopes(uid), [
+      where('searchTokens', 'array-contains', getFeedSearchProbe(terms)),
+      orderBy('createdAt', 'desc'), orderBy(documentId(), 'desc'), limit(POST_SEARCH_CANDIDATES)])
+    return filterFeedPosts(snapshots.map(toPost).filter((post): post is Post => Boolean(post)), keyword)
   })
 }
 
@@ -199,6 +228,7 @@ export async function createPost(
   files: UploadPhoto[],
   author: AuthorInfo,
 ): Promise<string> {
+  assertCleanContent(input.title, input.content, input.placeName)
   const db = requireDb()
   const groupId = input.groupId || ''
   const visibility = await getGroupPostVisibility(groupId, input.visibility, author.uid)
@@ -344,6 +374,7 @@ export async function updatePost(
   files: UploadPhoto[],
   uid: string,
 ): Promise<void> {
+  assertCleanContent(input.title, input.content, input.placeName)
   const post = await getPostById(postId, uid)
 
   if (!post) {

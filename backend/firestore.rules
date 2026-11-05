@@ -4,7 +4,7 @@ service cloud.firestore {
     function signedIn() { return request.auth != null; }
     function authenticated() {
       return signedIn() && (!exists(/databases/$(database)/documents/moderationUsers/$(request.auth.uid))
-        || get(/databases/$(database)/documents/moderationUsers/$(request.auth.uid)).data.suspended != true);
+        || get(/databases/$(database)/documents/moderationUsers/$(request.auth.uid)).data.get('suspended', false) != true);
     }
     function active() {
       return authenticated() && exists(/databases/$(database)/documents/users/$(request.auth.uid))
@@ -33,7 +33,7 @@ service cloud.firestore {
     function validOnboardingUpdate(uid) {
       // Existing completed accounts keep their access. New and unfinished accounts must enroll.
       return request.resource.data.get('registrationRequired', false) == resource.data.get('registrationRequired', false)
-        && (request.resource.data.onboardingComplete == false
+        && (request.resource.data.get('onboardingComplete', true) == false
           || (resource.data.get('onboardingComplete', true) != false && !resource.data.get('registrationRequired', false))
           || registrationComplete(uid));
     }
@@ -112,16 +112,26 @@ service cloud.firestore {
     function chatMember(chatId) {
       return active() && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participantIds;
     }
+    function validChatReactionUpdate() {
+      let previous = resource.data.get('reactionsBy', {});
+      let next = request.resource.data.get('reactionsBy', {});
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactionsBy'])
+        && previous is map && next is map
+        && next.diff(previous).affectedKeys().hasOnly([request.auth.uid])
+        && (!next.keys().hasAny([request.auth.uid])
+          || (resource.data.uid != 'deleted-user'
+            && next[request.auth.uid] in ['👍', '❤️', '😂', '😮', '😢', '🙏']));
+    }
     function validProfileIdentity(uid) {
       let data = request.resource.data;
-      return (!('username' in data) && data.onboardingComplete == false)
+      return (!('username' in data) && data.get('onboardingComplete', true) == false)
         || (data.username is string && data.username.matches('^[a-z0-9._]{1,30}$')
           && getAfter(/databases/$(database)/documents/usernames/$('@' + data.username)).data.uid == uid);
     }
     function validProfileText() {
       let data = request.resource.data;
       return (!('bio' in data) || (data.bio is string && data.bio.size() <= 150))
-        && (data.onboardingComplete == false || (data.nickname is string && data.nickname.size() > 0 && data.nickname.size() <= 24));
+        && (data.get('onboardingComplete', true) == false || (data.nickname is string && data.nickname.size() > 0 && data.nickname.size() <= 24));
     }
     function releasesOldUsername() {
       return !('username' in resource.data) || request.resource.data.username == resource.data.username
@@ -151,10 +161,13 @@ service cloud.firestore {
     }
     match /users/{uid} {
       allow read: if active() || accountOwner(uid);
+      // searchTokens is the server-built search index (syncUserProfile).
       allow create: if accountOwner(uid) && request.resource.data.uid == uid && validProfileIdentity(uid) && validProfileText()
-        && request.resource.data.onboardingComplete == false && request.resource.data.registrationRequired == true;
+        && request.resource.data.onboardingComplete == false && request.resource.data.registrationRequired == true
+        && !('searchTokens' in request.resource.data);
       allow update: if (accountOwner(uid) && request.resource.data.uid == uid && validProfileIdentity(uid) && validProfileText()
-        && validOnboardingUpdate(uid) && releasesOldUsername()) || networkChange(uid);
+        && validOnboardingUpdate(uid) && releasesOldUsername()
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['searchTokens'])) || networkChange(uid);
       allow delete: if accountOwner(uid) && (!('username' in resource.data)
         || !existsAfter(/databases/$(database)/documents/usernames/$('@' + resource.data.username)));
       match /private/registration {
@@ -197,6 +210,16 @@ service cloud.firestore {
           && (!(request.resource.data.type in ['like', 'comment', 'reply', 'mention']) || validSocialNotification(uid));
         allow update: if isOwner(uid) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readAt']);
         allow delete: if isOwner(uid) || isOwner(resource.data.actorUid);
+      }
+      // Blocks are private to the blocker; moderation.js forwards each new one to the operator.
+      match /blocks/{blockedUid} {
+        allow read, delete: if accountOwner(uid);
+        allow create, update: if isOwner(uid) && blockedUid != uid
+          && request.resource.data.keys().hasOnly(['uid', 'nickname', 'photoURL', 'createdAt'])
+          && request.resource.data.uid == blockedUid
+          && request.resource.data.nickname is string && request.resource.data.nickname.size() <= 24
+          && request.resource.data.photoURL is string && request.resource.data.photoURL.size() <= 4096
+          && request.resource.data.createdAt == request.time;
       }
       match /fcmTokens/{tokenId} { allow read, write: if isOwner(uid); }
       match /expoPushTokens/{tokenId} {
@@ -266,23 +289,27 @@ service cloud.firestore {
         && locationConsented()
         && validPostGroup(request.resource.data, '')
         && !exists(/databases/$(database)/documents/moderationPosts/$(postId))
+        && request.resource.data.visibility in ['followers', 'private', 'public', 'group']
+        && request.resource.data.get('likeCount', 0) == 0 && request.resource.data.get('commentCount', 0) == 0
+        && !('searchTokens' in request.resource.data);
+      // Like and comment counts are recounted by server functions (counters.js) only.
+      // searchTokens is the server-built search index (syncPostSearchTokens). A client
+      // that overwrites the whole pin may drop it, and the function rebuilds it.
+      allow update: if isOwner(resource.data.uid) && request.resource.data.uid == resource.data.uid
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['likeCount', 'commentCount'])
+        && (!('searchTokens' in request.resource.data) || request.resource.data.searchTokens == resource.data.get('searchTokens', null))
+        && validPostGroup(request.resource.data, resource.data.get('groupId', ''))
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['lat', 'lng', 'placeName', 'address', 'visibility', 'groupId']) || locationConsented())
         && request.resource.data.visibility in ['followers', 'private', 'public', 'group'];
-      allow update: if (isOwner(resource.data.uid) && request.resource.data.uid == resource.data.uid
-          && validPostGroup(request.resource.data, resource.data.get('groupId', ''))
-          && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['lat', 'lng', 'placeName', 'address', 'visibility', 'groupId']) || locationConsented())
-          && request.resource.data.visibility in ['followers', 'private', 'public', 'group'])
-        || (canReadPost(resource.data) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likeCount', 'commentCount', 'updatedAt']));
       allow delete: if isOwner(resource.data.uid);
       match /comments/{commentId} {
         allow read: if canReadPost(post(postId)) || isOwner(resource.data.uid);
         allow create: if isOwner(request.resource.data.uid) && canReadPost(post(postId)) && validComment(request.resource.data)
           && request.resource.data.id == commentId && request.resource.data.replyCount == 0 && request.resource.data.get('deleted', false) == false;
-        allow update: if canReadPost(post(postId))
-          && ((request.resource.data.diff(resource.data).affectedKeys().hasOnly(['replyCount'])
-              && request.resource.data.replyCount is int && request.resource.data.replyCount >= 0)
-            || ((isOwner(resource.data.uid) || isOwner(post(postId).uid))
-              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['content', 'deleted'])
-              && request.resource.data.content == '' && request.resource.data.deleted == true));
+        // Clients only mark a comment deleted; replyCount and removal are server-side.
+        allow update: if canReadPost(post(postId)) && (isOwner(resource.data.uid) || isOwner(post(postId).uid))
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['content', 'deleted'])
+          && request.resource.data.content == '' && request.resource.data.deleted == true;
         allow delete: if isOwner(resource.data.uid) || isOwner(post(postId).uid);
         match /replies/{replyId} {
           allow read: if canReadPost(post(postId)) || isOwner(resource.data.uid);
@@ -316,18 +343,28 @@ service cloud.firestore {
         && (request.resource.data.participantIds == resource.data.participantIds || resource.data.get('kind', 'direct') == 'group');
       match /messages/{messageId} {
         allow read: if chatMember(chatId);
-        allow create: if chatMember(chatId) && isOwner(request.resource.data.uid);
+        allow create: if chatMember(chatId) && isOwner(request.resource.data.uid)
+          && request.resource.data.get('reactionsBy', {}) is map
+          && request.resource.data.get('reactionsBy', {}).size() == 0;
+        allow update: if chatMember(chatId) && validChatReactionUpdate();
         allow update: if chatMember(chatId) && isOwner(resource.data.uid)
           && request.resource.data.uid == 'deleted-user'
           && request.resource.data.content == '탈퇴한 사용자의 메시지입니다.'
           && request.resource.data.photoUrl == '' && request.resource.data.photoName == ''
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['uid', 'authorNickname', 'content', 'photoUrl', 'photoName']);
+          && request.resource.data.get('reactionsBy', {}) is map
+          && request.resource.data.get('reactionsBy', {}).size() == 0
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['uid', 'authorNickname', 'content', 'photoUrl', 'photoName', 'reactionsBy']);
       }
     }
     match /livePlaceStatusUpdates/{id} {
       allow read: if active();
       allow create: if isOwner(request.resource.data.uid);
       allow delete: if isOwner(resource.data.uid);
+    }
+    // Update notices are available before login; publishing is admin-only.
+    match /appReleases/{platform} {
+      allow get: if platform in ['android', 'ios'];
+      allow list, write: if false;
     }
     // These collections are accessible exclusively through authenticated server functions.
     match /moderationCases/{id} { allow read, write: if false; }

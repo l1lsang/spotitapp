@@ -50,5 +50,3 @@ artifacts/*.aab
 artifacts/*.ipa
 *-debug.log
 .env
-google-services.json
-GoogleService-Info.plist
