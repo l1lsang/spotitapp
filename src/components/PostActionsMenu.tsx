@@ -1,8 +1,7 @@
 import { useRef, useState } from 'react'
 import { Modal, Platform, Pressable, StyleSheet, View, useWindowDimensions, type StyleProp, type ViewStyle } from 'react-native';
 import { Text } from './Typography';
-import Svg, { Path } from 'react-native-svg'
-import { ArrowUpRight, Ban, Flag, Pencil, Share2, ShieldAlert, Trash2 } from 'lucide-react-native'
+import { ArrowUpRight, Ban, Flag, Menu, Pencil, Share2, ShieldAlert, Trash2 } from 'lucide-react-native'
 import { ReportDialog } from './ReportButton'
 import { BlockUserDialog } from './BlockUserDialog'
 import type { BlockTarget } from '../services/blockService'
@@ -12,14 +11,6 @@ import type { Post } from '../types/post'
 
 type MenuItem = { label: string; Icon: typeof Pencil; danger?: boolean; onPress: () => void }
 type Anchor = { top: number; right: number }
-
-// Figma 41:2 — post-more icon (1:3495), drawn at its original 34px size.
-function PostMoreIcon() {
-  const dot = (cx: number) => `M${cx + 1.4167} 17C${cx + 1.4167} 17.7824 ${cx + 0.7824} 18.4167 ${cx} 18.4167C${cx - 0.7824} 18.4167 ${cx - 1.4167} 17.7824 ${cx - 1.4167} 17C${cx - 1.4167} 16.2176 ${cx - 0.7824} 15.5833 ${cx} 15.5833C${cx + 0.7824} 15.5833 ${cx + 1.4167} 16.2176 ${cx + 1.4167} 17Z`
-  return <Svg width={34} height={34} viewBox="0 0 34 34" fill="none">
-    {[17, 26.9167, 7.0833].map(cx => <Path key={cx} d={dot(cx)} stroke={p.muted} strokeWidth={1.41667} strokeLinecap="round" strokeLinejoin="round" />)}
-  </Svg>
-}
 
 // Owner: edit → share → delete. Signed-in visitor: share, pin report, author report, block. Guest: share.
 // Lists such as the feed add onOpen (view details) and leave deletion to the detail screen.
@@ -63,7 +54,7 @@ export function PostActionsMenu({ post, isOwner, canReport, busy, onOpen, onEdit
 
   return <>
     <View ref={trigger} collapsable={false} style={[styles.trigger, triggerStyle]}>
-      <IconButton label="기록 더보기" disabled={busy} selected={!!anchor} onPress={open}><PostMoreIcon /></IconButton>
+      <IconButton label="기록 더보기" disabled={busy} selected={!!anchor} onPress={open}><Menu size={22} color={p.muted} strokeWidth={1.8} /></IconButton>
     </View>
     <Modal visible={!!anchor} transparent animationType="none" statusBarTranslucent onRequestClose={() => setAnchor(null)} onDismiss={flush}>
       <Pressable accessibilityLabel="기록 메뉴 닫기" style={StyleSheet.absoluteFill} onPress={() => setAnchor(null)} />

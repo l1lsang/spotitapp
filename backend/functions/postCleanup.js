@@ -12,6 +12,9 @@ const options = { region: 'us-central1', maxInstances: 10, retry: true }
 exports.cleanupDeletedPost = onDocumentDeleted({ ...options, document: 'posts/{postId}', timeoutSeconds: 300 }, async event => {
   if (isStaleEvent(event.time, Date.now(), 24 * 60 * 60_000)) return
   const { postId } = event.params
+  // An operator hiding a pin moves it to moderationPosts so it can be restored;
+  // its photos, comments and likes must survive until that review ends.
+  if ((await db.doc(`moderationPosts/${postId}`).get()).exists) return
   await db.recursiveDelete(db.doc(`posts/${postId}`))
   const uid = event.data?.data()?.uid
   if (typeof uid === 'string' && uid && !uid.includes('/')) {

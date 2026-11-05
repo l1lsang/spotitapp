@@ -1,0 +1,57 @@
+diff --git a/node_modules/expo-image-picker/android/src/main/java/expo/modules/imagepicker/contracts/ImageLibraryContract.kt b/node_modules/expo-image-picker/android/src/main/java/expo/modules/imagepicker/contracts/ImageLibraryContract.kt
+index e0dd37c..31403db 100644
+--- a/node_modules/expo-image-picker/android/src/main/java/expo/modules/imagepicker/contracts/ImageLibraryContract.kt
++++ b/node_modules/expo-image-picker/android/src/main/java/expo/modules/imagepicker/contracts/ImageLibraryContract.kt
+@@ -5,6 +5,8 @@ import android.content.ContentResolver
+ import android.content.Context
+ import android.content.Intent
+ import android.net.Uri
++import android.os.Build
++import android.os.ext.SdkExtensions
+ import androidx.activity.result.PickVisualMediaRequest
+ import androidx.activity.result.contract.ActivityResultContracts.PickMultipleVisualMedia
+ import androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia
+@@ -63,20 +65,20 @@ internal class ImageLibraryContract(
+       if (selectionLimit == 1) {
+         // If multiple selection is allowed but the limit is 1, we should ignore
+         // the multiple selection flag and just treat it as a single selection.
+-        return PickVisualMedia().createIntent(context, request)
++        return PickVisualMedia().createIntent(context, request).withLocationRequest(input.options)
+       }
+ 
+       if (selectionLimit > 1) {
+-        return PickMultipleVisualMedia(selectionLimit).createIntent(context, request)
++        return PickMultipleVisualMedia(selectionLimit).createIntent(context, request).withLocationRequest(input.options)
+       }
+ 
+       // If the selection limit is 0, it is the same as unlimited selection.
+       if (selectionLimit == UNLIMITED_SELECTION) {
+-        return PickMultipleVisualMedia().createIntent(context, request)
++        return PickMultipleVisualMedia().createIntent(context, request).withLocationRequest(input.options)
+       }
+     }
+ 
+-    return PickVisualMedia().createIntent(context, request)
++    return PickVisualMedia().createIntent(context, request).withLocationRequest(input.options)
+   }
+ 
+   override fun parseResult(input: ImageLibraryContractOptions, resultCode: Int, intent: Intent?) =
+@@ -112,6 +114,18 @@ internal class ImageLibraryContract(
+       } ?: ImagePickerContractResult.Error
+     }
+ 
++  // The system photo picker strips GPS EXIF unless the caller asks for it (Android 13+,
++  // SDK extension 23+; ignored elsewhere). Same check and extra as
++  // androidx.photopicker:photopicker-activity's setLocationMetadataAccessRequested().
++  private fun Intent.withLocationRequest(options: ImagePickerOptions): Intent = apply {
++    if (options.exif &&
++      Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
++      SdkExtensions.getExtensionVersion(Build.VERSION_CODES.TIRAMISU) >= 23
++    ) {
++      putExtra("android.provider.extra.REQUEST_LOCATION_METADATA_ACCESS", true)
++    }
++  }
++
+   private fun createLegacyIntent(options: ImagePickerOptions) = Intent(Intent.ACTION_GET_CONTENT)
+     .addCategory(Intent.CATEGORY_OPENABLE)
+     .setType("*/*")

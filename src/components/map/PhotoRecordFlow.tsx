@@ -15,6 +15,7 @@ import type { PhotoTakenAt } from '../../lib/photoMetadata';
 import { searchNativePlaces } from '../../lib/placeSearch';
 import { ensureMediaLocationAccess, wasMediaLocationDenied } from '../../lib/mediaLocationPermission';
 import { PHOTO_RECORD_MAX_FILES, useNearbyPlaces, type PhotoRecordFlowState } from '../../hooks/usePhotoRecordFlow';
+import { MinimizedSheetRow, SheetGrip } from './SheetGrip';
 
 const TIP_STORAGE_KEY = 'spotit:photo-record-tip-seen';
 
@@ -94,14 +95,20 @@ export function PhotoRecordSheet({ flow, sheet, notice, locating, getSearchCente
 }) {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
+  const [minimized, setMinimized] = useState(false);
+  const small = sheet && minimized;
+  const smallTitle = flow.step === 'reading' ? '사진 정보를 읽고 있어요' : flow.step === 'confirm' ? '사진 위치에 핀을 남길까요?' : '핀 위치를 맞춰주세요';
+  const smallDetail = flow.step === 'locate' ? '지도를 움직여 핀을 맞춘 뒤 펼쳐서 확인해 주세요' : `사진 ${flow.items.length}장`;
   return <View accessibilityLabel="사진으로 기록" onLayout={onLayout}
     style={[r.sheet, sheet ? r.sheetPhone : [r.sheetWide, elevation.dialog, { width: Math.min(420, width - 36) }]]}>
     <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={[r.sheetContent, sheet && { paddingTop: 10, paddingHorizontal: 20, paddingBottom: Math.max(28, insets.bottom) }]}>
-      {sheet && <View style={r.handle} />}
-      {!!notice && <Notice error>{notice}</Notice>}
-      {flow.step === 'reading' && <ReadingContent flow={flow} />}
-      {flow.step === 'confirm' && <ConfirmContent flow={flow} onAdjust={onAdjust} onConfirm={onConfirm} />}
-      {flow.step === 'locate' && <LocateContent key={flow.locateReason} flow={flow} getSearchCenter={getSearchCenter} locating={locating}
+      {sheet && <SheetGrip minimized={minimized} onChange={setMinimized} label="사진 기록" />}
+      {small && <MinimizedSheetRow title={smallTitle} detail={smallDetail} onExpand={() => setMinimized(false)}
+        leading={<Image source={{ uri: flow.items[0].photo.uri }} style={r.smallThumb} />} />}
+      {!small && !!notice && <Notice error>{notice}</Notice>}
+      {!small && flow.step === 'reading' && <ReadingContent flow={flow} />}
+      {!small && flow.step === 'confirm' && <ConfirmContent flow={flow} onAdjust={onAdjust} onConfirm={onConfirm} />}
+      {!small && flow.step === 'locate' && <LocateContent key={flow.locateReason} flow={flow} getSearchCenter={getSearchCenter} locating={locating}
         onPlaceHere={onPlaceHere} onUseCurrentLocation={onUseCurrentLocation} onReturnToPhotoLocation={onReturnToPhotoLocation} onSelectPlace={onSelectPlace} />}
     </ScrollView>
   </View>;
@@ -274,7 +281,7 @@ const r = StyleSheet.create({
   sheetPhone: { left: 0, right: 0, bottom: 0, maxHeight: '72%', borderTopLeftRadius: 20, borderTopRightRadius: 20, boxShadow: '0 -6px 24px #161F1B29' },
   sheetWide: { left: 18, bottom: 24, maxHeight: '85%', borderRadius: 12 },
   sheetContent: { padding: 24, gap: 16 },
-  handle: { alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: p.line },
+  smallThumb: { width: 36, height: 36, borderRadius: 8, backgroundColor: p.surface },
   heading: { gap: 6 },
   title: { color: p.ink, fontSize: 20, lineHeight: 27, fontWeight: '700', letterSpacing: -0.5 },
   description: { color: p.muted, fontSize: 14, lineHeight: 22 },

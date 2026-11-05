@@ -372,6 +372,7 @@ service cloud.firestore {
     match /moderationUsers/{id} { allow read, write: if false; }
     match /moderationAudit/{id} { allow read, write: if false; }
     match /moderationLimits/{id} { allow read, write: if false; }
+    match /moderationComments/{id} { allow read, write: if false; }
     match /adminSessions/{id} { allow read, write: if false; }
     match /nativePushQueue/{id} { allow read, write: if false; }
   }

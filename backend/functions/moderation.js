@@ -253,8 +253,9 @@ exports.adminReviewCase = onCall(options, async request => {
     const ref = db.doc(`moderationCases/${caseId}`)
     const item = (await tx.get(ref)).data()
     if (!item) throw new HttpsError('not-found', '접수 내역을 찾을 수 없습니다.')
-    if (action !== 'save') {
-      if (!['pin', 'auto'].includes(item.kind) && !(item.kind === 'photo' && item.sourceKind === 'pin')) throw new HttpsError('invalid-argument', '핀 또는 핀 사진 신고에서만 연결된 핀을 숨길 수 있습니다.')
+    if (action !== 'save' && item.kind === 'comment') await moderateComment(tx, item, caseId, action)
+    else if (action !== 'save') {
+      if (!['pin', 'auto'].includes(item.kind) && !(item.kind === 'photo' && item.sourceKind === 'pin')) throw new HttpsError('invalid-argument', '핀·댓글 신고에서만 연결된 콘텐츠를 숨길 수 있습니다.')
       const postRef = db.doc(`posts/${item.targetId}`)
       const hiddenRef = db.doc(`moderationPosts/${item.targetId}`)
       const [post, hidden] = await Promise.all([tx.get(postRef), tx.get(hiddenRef)])
@@ -272,9 +273,80 @@ exports.adminReviewCase = onCall(options, async request => {
       }
     }
     tx.update(ref, { status, note, reply, updatedAt: stamp(), lastAction: action })
-    tx.create(db.collection('moderationAudit').doc(), { caseId, sessionId: adminSession.id, status, action, note, reply, createdAt: stamp() })
+    tx.create(db.collection('moderationAudit').doc(), { caseId, ...(item.targetUid ? { targetUid: item.targetUid } : {}), sessionId: adminSession.id, status, action, note, reply, createdAt: stamp() })
   })
   return { ok: true }
+})
+
+// A hidden comment is parked in moderationComments so the operator can restore it after review.
+// Top-level comments are only marked deleted, exactly like a member deleting their own comment,
+// so replies under them stay in place; replies are removed outright.
+async function moderateComment(tx, item, caseId, action) {
+  const [commentId, replyId] = String(item.messageId || '').split('/')
+  if (!commentId) throw new HttpsError('failed-precondition', '신고된 댓글 정보를 찾을 수 없습니다.')
+  const postRef = db.doc(`posts/${item.targetId}`)
+  const commentRef = postRef.collection('comments').doc(commentId)
+  const targetRef = replyId ? commentRef.collection('replies').doc(replyId) : commentRef
+  const backupRef = db.doc(`moderationComments/${hash(`${item.targetId}/${item.messageId}`)}`)
+  const [post, target, backup, parent] = await Promise.all([tx.get(postRef), tx.get(targetRef), tx.get(backupRef), tx.get(commentRef)])
+  const current = target.data()
+  if (action === 'hide') {
+    if (backup.exists) return
+    if (!current || current.deleted) throw new HttpsError('not-found', '이미 삭제된 댓글입니다.')
+    tx.set(backupRef, { postId: item.targetId, commentId, replyId: replyId || '', comment: current, hiddenAt: stamp(), caseId })
+    if (replyId) tx.delete(targetRef)
+    else tx.update(targetRef, { content: '', deleted: true })
+    return
+  }
+  if (!backup.exists) throw new HttpsError('failed-precondition', '현재 숨겨진 댓글이 아닙니다.')
+  if (!post.exists) throw new HttpsError('failed-precondition', '핀이 삭제되어 댓글을 복구할 수 없습니다.')
+  const saved = backup.data().comment
+  if (replyId) {
+    if (!parent.exists || parent.data().deleted) throw new HttpsError('failed-precondition', '원 댓글이 삭제되어 답글을 복구할 수 없습니다.')
+    if (!current) tx.create(targetRef, saved)
+  } else {
+    // A deleted comment with no replies left is purged by the counters, so it may need recreating.
+    tx.set(targetRef, { ...saved, deleted: false, replyCount: current?.replyCount || 0 })
+  }
+  tx.delete(backupRef)
+}
+
+// Reports received and actions taken against one account, so a suspension is judged in context.
+// Equality-only queries avoid needing composite indexes; the newest cases are picked in memory.
+exports.adminUserHistory = onCall(options, async request => {
+  await session(request)
+  const targetUid = id(request.data?.targetUid)
+  const cases = db.collection('moderationCases')
+  const [received, total, open, filed, actions] = await Promise.all([
+    cases.where('targetUid', '==', targetUid).limit(300).get(),
+    cases.where('targetUid', '==', targetUid).count().get(),
+    cases.where('targetUid', '==', targetUid).where('status', 'in', ['open', 'reviewing']).count().get(),
+    cases.where('reporterUid', '==', targetUid).count().get(),
+    db.collection('moderationAudit').where('targetUid', '==', targetUid).limit(100).get(),
+  ])
+  const newest = (a, b) => b.createdAt - a.createdAt
+  return {
+    total: total.data().count, open: open.data().count, filed: filed.data().count,
+    cases: received.docs.map(doc => {
+      const { kind, sourceKind, title, reason, status, reporterName, createdAt, lastAction } = doc.data()
+      return serialize({ id: doc.id, kind, ...(sourceKind ? { sourceKind } : {}), title, reason, status, reporterName, createdAt, lastAction: lastAction || '' })
+    }).sort(newest).slice(0, 30),
+    actions: actions.docs.map(doc => {
+      const { action, reason, note, caseId, createdAt } = doc.data()
+      return serialize({ id: doc.id, action, reason: reason || note || '', caseId: caseId || '', createdAt })
+    }).sort(newest).slice(0, 20),
+  }
+})
+
+// Every save on a case leaves an audit entry; this returns them oldest first as a timeline.
+exports.adminCaseHistory = onCall(options, async request => {
+  await session(request)
+  const caseId = id(request.data?.caseId)
+  const snapshot = await db.collection('moderationAudit').where('caseId', '==', caseId).limit(100).get()
+  return { entries: snapshot.docs.map(doc => {
+    const { action, status, note, reply, createdAt } = doc.data()
+    return serialize({ id: doc.id, action, status, note: note || '', reply: reply || '', createdAt })
+  }).sort((a, b) => a.createdAt - b.createdAt) }
 })
 
 // Conservative keyword screening queues evidence for review. It never deletes on keyword matches.

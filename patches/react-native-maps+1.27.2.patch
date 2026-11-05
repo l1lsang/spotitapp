@@ -1,0 +1,19 @@
+diff --git a/node_modules/react-native-maps/android/src/main/java/com/rnmaps/maps/MapMarker.java b/node_modules/react-native-maps/android/src/main/java/com/rnmaps/maps/MapMarker.java
+--- a/node_modules/react-native-maps/android/src/main/java/com/rnmaps/maps/MapMarker.java
++++ b/node_modules/react-native-maps/android/src/main/java/com/rnmaps/maps/MapMarker.java
+@@ -536,12 +536,9 @@ public class MapMarker extends MapFeature {
+         super.requestLayout();
+ 
+         if (getChildCount() == 0) {
+-            if (hasCustomMarkerView) {
+-                hasCustomMarkerView = false;
+-                clearDrawableCache();
+-                updateTracksViewChanges();
+-                update(true);
+-            }
++            // Fabric detaches a marker's children before removing the marker itself, so
++            // switching to the default pin here flashed red pins whenever markers were
++            // remounted. Keep the last custom icon; addView() redraws when children return.
+         } else {
+             // custom subview
+             if (!(getChildAt(0) instanceof MapCallout)) {

@@ -58,7 +58,10 @@ export default function NativeMap({ center, centerRevision = 0, posts, onSelect,
       const color = getPostMarkerColor(group.posts[0], currentUser?.uid, profile?.pinThemes);
       const active = group.posts.some(post => post.id === selectedPostId);
       const position = group.posts.find(post => post.id === selectedPostId) || group.location;
-      return <SnapshotMarker key={group.posts.map(post => post.id).join('-') + color + active} version={`${color}:${group.posts.length}:${active}`} coordinate={{ latitude: position.lat, longitude: position.lng }} anchor={{ x: 0.5, y: group.posts.length > 1 ? 0.5 : 0.86 }} onPress={event => { event.stopPropagation(); onSelect(group.posts); }}>
+      // A stable key keeps the native marker when only its look changes; remounting it
+      // flashed Android's default pin while the old marker was being torn down.
+      const key = group.posts.reduce((first, post) => post.id < first ? post.id : first, group.posts[0].id);
+      return <SnapshotMarker key={key} version={`${color}:${group.posts.length}:${active}`} coordinate={{ latitude: position.lat, longitude: position.lng }} anchor={{ x: 0.5, y: group.posts.length > 1 ? 0.5 : 0.86 }} onPress={event => { event.stopPropagation(); onSelect(group.posts); }}>
         <PostPin color={color} count={group.posts.length} selected={active} />
       </SnapshotMarker>;
     })}
