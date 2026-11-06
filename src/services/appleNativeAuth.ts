@@ -3,6 +3,8 @@ export interface AppleSignInResult {
   idToken: string | null
   state: string | null
   displayName?: string
+  /** Short-lived Apple authorization code, used to revoke the app's access on account deletion. */
+  authorizationCode?: string
 }
 
 export async function nativeAppleSignIn(_rawNonce: string, _state: string): Promise<AppleSignInResult> {

@@ -52,7 +52,7 @@ npx eas build --platform ios --profile production
 | Kakao 로그인 | Native app key·플랫폼 키 해시·OIDC, Firebase provider의 토큰 audience 호환성 확인 |
 | Apple 로그인 | iOS Sign in with Apple capability, Firebase Apple 제공자, Android Services ID·HTTPS Return URL. [설정 안내](docs/native-auth-setup.md#apple) |
 | 푸시 | EAS project ID, APNs/FCM 자격 증명, [앱 푸시 설정·오류 점검](docs/native-push-setup.md), [네이티브 푸시 서버](backend/README.md) 배포 |
-| HTTPS 링크로 앱 열기 | 도메인에 Apple Universal Links / Android App Links 연결 파일과 앱 설정 추가 |
+| HTTPS 링크로 앱 열기 | 앱 설정(`www.pinori.kr`의 `/posts`·`/feed`·`/groups`·`/people`·`/chats`)은 완료. 웹 저장소 `public/.well-known/`의 `apple-app-site-association`·`assetlinks.json` 배포 필요. `assetlinks.json`에는 Play 앱 서명 키와 EAS 업로드 키 SHA-256이 모두 들어 있음 |
 
 인증 등록 방법은 [네이티브 인증 설정](docs/native-auth-setup.md)을 참고하세요. 원본 JavaScript 지도 키는 네이티브 SDK 키 등록을 대신하지 않습니다.
 

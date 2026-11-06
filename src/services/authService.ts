@@ -9,9 +9,9 @@ import {
 } from 'firebase/auth'
 import { requireAuth } from '../lib/firebase'
 import { getSignupRequirementsError, type SignupRequirements } from '../lib/signupRequirements'
-import { deleteUserAccountData, upsertUserProfile } from './userService'
+import { deleteIncompleteAccountData, deleteUserAccountData, upsertUserProfile } from './userService'
 import { disablePushNotifications } from './pushNotificationService'
-import { reauthenticateWithApple, signInWithApple } from './appleAuthService'
+import { reauthenticateWithApple, revokeAppleAuthorization, signInWithApple, type AppleRevocation } from './appleAuthService'
 
 export class AuthCancelledError extends Error {
   code = 'auth/cancelled'
@@ -175,24 +175,46 @@ export async function reauthenticateAccount(user: User, password?: string): Prom
   }
 }
 
-export async function deleteAccount(user: User): Promise<void> {
+const RECENT_AUTH_MS = 4 * 60_000
+
+function recentLoginError() {
+  return Object.assign(new Error('계정 보호를 위해 다시 인증한 뒤 탈퇴해 주세요.'), { code: 'auth/requires-recent-login' })
+}
+
+/** True when Firebase will accept account deletion without asking the user to sign in again. */
+export async function isRecentlyAuthenticated(user: User): Promise<boolean> {
+  try {
+    const authenticatedAt = Date.parse((await user.getIdTokenResult()).authTime)
+    return Number.isFinite(authenticatedAt) && Date.now() - authenticatedAt <= RECENT_AUTH_MS
+  } catch { return false }
+}
+
+export async function deleteAccount(user: User, options: { incomplete?: boolean; appleRevocation?: AppleRevocation } = {}): Promise<void> {
   // A custom-token reauthentication replaces Firebase's User instance. Use the
   // refreshed session only when it still belongs to the requested account.
   const currentUser = requireAuth().currentUser
-  if (!currentUser || currentUser.uid !== user.uid) {
-    const error = new Error('계정 보호를 위해 다시 인증한 뒤 탈퇴해 주세요.')
-    Object.assign(error, { code: 'auth/requires-recent-login' })
-    throw error
-  }
+  if (!currentUser || currentUser.uid !== user.uid) throw recentLoginError()
   // Validate recent authentication before deleting any profile data.
   const token = await currentUser.getIdTokenResult(true)
   const authenticatedAt = Date.parse(token.authTime)
-  if (!Number.isFinite(authenticatedAt) || Date.now() - authenticatedAt > 4 * 60_000) {
-    const error = new Error('계정 보호를 위해 다시 인증한 뒤 탈퇴해 주세요.')
-    Object.assign(error, { code: 'auth/requires-recent-login' })
-    throw error
-  }
+  if (!Number.isFinite(authenticatedAt) || Date.now() - authenticatedAt > RECENT_AUTH_MS) throw recentLoginError()
   await disablePushNotifications(user.uid)
-  await deleteUserAccountData(user.uid)
+  // An unfinished signup has no posts or relations, and the member-only rules
+  // would refuse the full cleanup queries; it only owns its own profile docs.
+  if (options.incomplete) await deleteIncompleteAccountData(user.uid)
+  else await deleteUserAccountData(user.uid)
+  if (options.appleRevocation) await revokeAppleAuthorization(currentUser, options.appleRevocation)
   await deleteUser(currentUser)
+}
+
+/**
+ * One-step deletion: asks for identity only when Firebase requires it. Apple accounts
+ * always confirm with Apple (one Face ID / Touch ID tap) so the Apple link can be revoked.
+ */
+export async function deleteMyAccount(user: User, options: { password?: string; incomplete?: boolean } = {}): Promise<void> {
+  const isApple = user.providerData.some(item => item.providerId === 'apple.com')
+  let appleRevocation: AppleRevocation | undefined
+  if (isApple) appleRevocation = await reauthenticateWithApple(user)
+  else if (!await isRecentlyAuthenticated(user)) await reauthenticateAccount(user, options.password)
+  await deleteAccount(user, { incomplete: options.incomplete, appleRevocation })
 }

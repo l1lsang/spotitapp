@@ -43,6 +43,14 @@
 - 취소 시 로그인 화면으로 복귀한다. 진행 중에는 중복 요청과 다른 로그인 버튼을 막고, 실패하면 다시 시도할 수 있다. 웹 팝업은 사용자 클릭 중에 시작한다.
 - 로그아웃은 기존 Firebase 세션 정리를 사용한다. 탈퇴 전에는 Apple 계정으로 `reauthenticateWithCredential` 또는 `reauthenticateWithPopup`을 호출하여 현재 UID를 유지한다.
 
+### 2026-11-05 Apple 로그인 오류 원인
+
+`accounts:createAuthUri`에 `apple.com`을 조회하면 `OPERATION_NOT_ALLOWED : The identity provider configuration is not found`가 반환된다. `google.com`, `oidc.kakao`는 정상이다. 즉 Firebase Authentication에 **Apple 제공자가 등록·활성화되어 있지 않아** 앱에서 Apple 인증을 마쳐도 `signInWithCredential`이 `auth/operation-not-allowed`로 실패하고 “이 로그인 방법은 아직 준비되지 않았습니다”가 표시된다. 앱 코드 수정이나 재빌드 없이 위 3번(Firebase Console → Authentication → 로그인 방법 → Apple 사용 설정)만 하면 해결된다. 탈퇴 시 Apple 토큰 철회까지 동작하려면 Team ID·Key ID·비공개 키도 입력한다.
+
+### 탈퇴 시 Apple 연결 해제
+
+Apple 계정 탈퇴는 항상 Apple 확인(Face ID 한 번)을 거쳐 받은 authorization code로 Firebase `v2/accounts:revokeToken`(tokenType `CODE`, 웹은 `revokeAccessToken`)을 호출한 뒤 계정을 삭제한다. 철회 실패는 탈퇴를 막지 않는다.
+
 ### 2026-10-14 검증
 
 `npm run test:apple`은 실제 소스에 제공자 SDK를 대체하여 nonce·state·이름 보존·취소·설정 누락·잘못된 재인증 계정을 검사한다. 콘솔의 Apple 제공자 활성화나 실사용 Apple 계정 로그인은 이 테스트에 포함되지 않는다. 실제 기기에서 로그인 → 신규 가입 완료 또는 기존 UID 확인 → 로그아웃 → 재로그인 → 재인증을 검증해야 한다.
@@ -100,7 +108,8 @@ SDK는 카카오톡 로그인을 시도하고 필요하면 시스템 브라우�
 - 신규 소셜 사용자도 생년월일·동의·사용자 이름을 완료해야 한다. 업로드나 프로필 저장이 실패하면 생성된 계정으로 다시 시도한다.
 - 사진은 기기에서 선택한 뒤 네이티브 편집 화면에서 드래그 이동, 확대, 양방향 회전, 좌우 반전, 초기화, 정사각형 자르기를 적용한다. 기존 프로필 사진도 다시 편집할 수 있다. JPEG로 압축해 Storage에 저장한다.
 - 로그아웃은 이 기기의 푸시 토큰을 먼저 제거한다. 제거에 실패하면 로그아웃을 중단하고 재시도할 수 있도록 오류를 표시한다. Firebase 로그아웃 후 Google/Kakao 세션 정리는 가능한 경우 수행한다.
-- 탈퇴 확인 화면에서 이메일 계정은 현재 비밀번호, Google/Kakao 계정은 해당 제공자 재인증을 요구한다. 네이티브 Kakao는 서버가 요청의 Firebase UID와 검증된 카카오 계정의 연결 UID가 일치할 때만 새 custom token을 발급하고 앱도 현재 UID가 유지되는지 확인한다. 이 재인증은 신규 계정을 생성하지 않는다. 웹에서는 `reauthenticateWithPopup`을 사용한다.
+- 탈퇴는 설정 → 계정 관리 → 회원 탈퇴 한 줄에서 시작한다. 로그인한 지 4분 이내면 재인증 없이 한 번에 탈퇴한다. 그보다 오래됐으면 이메일 계정은 현재 비밀번호(대화상자에서 재설정 메일 발송 가능), Google/Kakao 계정은 해당 제공자 재인증을 요구한다. Apple 계정은 토큰 철회를 위해 항상 Apple 확인을 거친다. 가입을 끝내지 않은 소셜 로그인 사용자는 가입 화면에서 ‘다른 계정으로 로그인’ 또는 ‘가입 취소’(임시 프로필과 Auth 계정 삭제)를 할 수 있다.
+- 재인증이 필요한 경우 이메일 계정은 현재 비밀번호, Google/Kakao 계정은 해당 제공자 재인증을 요구한다. 네이티브 Kakao는 서버가 요청의 Firebase UID와 검증된 카카오 계정의 연결 UID가 일치할 때만 새 custom token을 발급하고 앱도 현재 UID가 유지되는지 확인한다. 이 재인증은 신규 계정을 생성하지 않는다. 웹에서는 `reauthenticateWithPopup`을 사용한다.
 - 탈퇴 서비스는 최근 인증 시간을 확인하고 기기 푸시 토큰을 제거한 뒤 기존 데이터 삭제 서비스와 Firebase `deleteUser`를 순서대로 호출한다. 기존 삭제 서비스는 여러 Firestore batch로 실행되어 전체 과정이 단일 transaction은 아니다. 네트워크나 권한 문제로 중단되면 일부 데이터가 이미 삭제되었을 수 있다. 운영 수준의 완전한 재시도 보장은 서버의 삭제 작업 큐로 옮기는 것이 필요하다.
 
 ## 검증 범위

@@ -1,10 +1,11 @@
 import { useContext, useState } from 'react'
 import { Platform, Pressable, StyleSheet, View } from 'react-native';
 import { Text, TextInput } from './Typography';
-import { Check, MapPin, Plus, Save, X } from 'lucide-react-native'
+import { Check, ChevronDown, MapPin, Plus, Save, X } from 'lucide-react-native'
 import * as Crypto from 'expo-crypto'
 import { useAuth } from '../hooks/useAuth'
 import { saveUserPinTheme } from '../services/userService'
+import { PIN_COLOR_CHOICES, getPinShades } from '../lib/pinColors'
 import {
   DEFAULT_POST_PIN_COLOR, FOLLOWING_PIN_COLOR, PIN_COLOR_PALETTE,
   PIN_THEME_NAME_MAX_LENGTH, getPinThemeError, getPostPinColor, parsePinColorCode,
@@ -15,40 +16,65 @@ import { Button, Field, Notice, QuietSurface, p } from './ui'
 type PinSelection = Pick<PostFormInput, 'pinColor' | 'pinThemeId'>
 const monospace = Platform.select({ ios: 'Menlo', android: 'monospace', default: 'ui-monospace, SFMono-Regular, Consolas, monospace' })
 
-// Six recommended colors, a quiet preview and the HEX code; selection shows a check and an ink ring.
+// Tap a color, then a lighter or deeper shade if you like. The HEX code is tucked away for people who want it.
 export function PinColorPicker({ value, onChange, disabled = false }: {
   value: string; onChange: (color: string) => void; disabled?: boolean
 }) {
   const quiet = useContext(QuietSurface)
   const [focused, setFocused] = useState(false)
   const color = parsePinColorCode(value)
-  const preset = PIN_COLOR_PALETTE.find(item => item.color === color)
+  const [chosenBase, setBase] = useState(() => color || DEFAULT_POST_PIN_COLOR)
+  // A color set from outside (a saved theme, a typed code) becomes the new base unless it is one of its shades.
+  const base = color && !getPinShades(chosenBase).some(shade => parsePinColorCode(shade) === color) ? color : chosenBase
+  const [showCode, setShowCode] = useState(() => !color)
+  const choice = PIN_COLOR_CHOICES.find(item => item.color === color)
+  const shades = getPinShades(base)
+  const shadeIndex = color ? shades.findIndex(shade => parsePinColorCode(shade) === color) : -1
   const previewColor = color || '#a0a49d'
+  const pick = (next: string) => { onChange(next.toUpperCase()) }
   return <View style={styles.control} accessibilityLabel="색상">
-    <View style={styles.controlHeading}><Text style={styles.label}>색상</Text><Text style={styles.headingHint}>마음에 드는 색을 골라보세요</Text></View>
-    <View style={styles.swatches} accessibilityLabel="추천 색상">{PIN_COLOR_PALETTE.map(item => {
-      const selected = color === item.color
-      return <Pressable key={item.color} accessibilityRole="button" accessibilityLabel={`${item.name} ${item.color.toUpperCase()}`}
-        accessibilityState={{ selected, disabled }} disabled={disabled} onPress={() => onChange(item.color.toUpperCase())}
-        style={[styles.swatch, { backgroundColor: item.color }, disabled && styles.disabled]}>
-        {selected && <View pointerEvents="none" style={styles.swatchRing} />}
+    <View style={styles.preview}>
+      <View style={[styles.previewIcon, { backgroundColor: previewColor }]}><MapPin size={24} color={p.paper} /></View>
+      <View style={styles.previewText}>
+        <Text style={styles.previewName}>{!color ? '색상 확인' : choice?.name || (shadeIndex >= 0 ? `${PIN_COLOR_CHOICES.find(item => item.color === parsePinColorCode(base))?.name || '내 색'} · ${SHADE_LABELS[shadeIndex]}` : '나만의 색상')}</Text>
+        <Text style={styles.small}>지도에 이렇게 보여요</Text>
+      </View>
+    </View>
+    <View style={styles.swatches} accessibilityLabel="색상 고르기">{PIN_COLOR_CHOICES.map(item => {
+      const selected = parsePinColorCode(base) === item.color && shadeIndex >= 0
+      return <Pressable key={item.color} accessibilityRole="button" accessibilityLabel={item.name}
+        accessibilityState={{ selected, disabled }} disabled={disabled} hitSlop={2}
+        onPress={() => { setBase(item.color); pick(item.color) }}
+        style={({ pressed }) => [styles.swatch, { backgroundColor: item.color }, selected && styles.swatchSelected, pressed && { transform: [{ scale: 0.92 }] }, disabled && styles.disabled]}>
         {selected && <Check size={18} strokeWidth={3} color={p.paper} />}
       </Pressable>
     })}</View>
-    <View style={styles.preview}>
-      <View style={[styles.previewIcon, { backgroundColor: previewColor }]}><MapPin size={23} color={p.paper} /></View>
-      <View style={styles.previewText}><Text style={styles.previewName}>{color ? preset?.name || '나만의 색상' : '색상 확인'}</Text><Text style={styles.small}>{color ? color.toUpperCase() : '올바른 코드를 입력해 주세요'}</Text></View>
+    <View style={styles.shadeBlock}>
+      <View style={styles.controlHeading}><Text style={styles.label}>밝기</Text><Text style={styles.headingHint}>연하게 ← → 진하게</Text></View>
+      <View style={styles.shades} accessibilityLabel="밝기 고르기">{shades.map((shade, index) => {
+        const selected = index === shadeIndex
+        return <Pressable key={shade} accessibilityRole="button" accessibilityLabel={SHADE_LABELS[index]} accessibilityState={{ selected, disabled }} disabled={disabled}
+          onPress={() => pick(shade)} style={({ pressed }) => [styles.shade, { backgroundColor: shade }, selected && styles.shadeSelected, pressed && { opacity: 0.8 }, disabled && styles.disabled]}>
+          {selected && <Check size={16} strokeWidth={3} color={p.paper} />}
+        </Pressable>
+      })}</View>
     </View>
-    <View style={styles.hexField}>
-      <Text style={styles.hexLabel}>HEX 색상 코드</Text>
-      <TextInput accessibilityLabel="HEX 색상 코드" value={value} onChangeText={onChange} editable={!disabled}
+    <Pressable accessibilityRole="button" accessibilityState={{ expanded: showCode }} onPress={() => setShowCode(open => !open)} style={styles.codeToggle}>
+      <Text style={styles.codeToggleText}>색상 코드로 직접 입력</Text>
+      <Text style={styles.small}>{color ? color.toUpperCase() : ''}</Text>
+      <ChevronDown size={16} color={p.muted} style={showCode ? { transform: [{ rotate: '180deg' }] } : undefined} />
+    </Pressable>
+    {showCode && <View style={styles.hexField}>
+      <TextInput accessibilityLabel="HEX 색상 코드" value={value} onChangeText={next => { onChange(next); const parsed = parsePinColorCode(next); if (parsed) setBase(parsed) }} editable={!disabled}
         autoCapitalize="characters" autoCorrect={false} spellCheck={false} placeholder="#DF7658" placeholderTextColor={p.light} maxLength={7}
         onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
         style={[styles.hexInput, quiet && styles.hexQuiet, !color && styles.hexInvalid, focused && { borderColor: p.primary }, disabled && { color: p.muted }]} />
-    </View>
-    <Text style={[styles.small, !color && { color: p.danger }]}>{color ? '#을 포함하거나 생략한 3자리·6자리 코드를 입력할 수 있어요.' : '색상 코드는 0–9, A–F로 된 3자리 또는 6자리여야 해요.'}</Text>
+      <Text style={[styles.small, !color && { color: p.danger }]}>{color ? '#을 포함하거나 생략한 3자리·6자리 코드를 입력할 수 있어요.' : '색상 코드는 0–9, A–F로 된 3자리 또는 6자리여야 해요.'}</Text>
+    </View>}
   </View>
 }
+
+const SHADE_LABELS = ['아주 연하게', '연하게', '기본', '진하게', '아주 진하게']
 
 export function PinThemeEditor({ value, onChange }: { value?: PinSelection; onChange?: (value: PinSelection) => void }) {
   const { currentUser, profile, refreshProfile } = useAuth()
@@ -117,11 +143,17 @@ const styles = StyleSheet.create({
   control: { gap: 12, minWidth: 0 },
   controlHeading: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', justifyContent: 'space-between', columnGap: 12, rowGap: 4 },
   label: { color: p.ink, fontSize: 14, fontWeight: '600' }, headingHint: { color: p.muted, fontSize: 11.8 },
-  swatches: { flexDirection: 'row', gap: 9, paddingVertical: 4 },
-  swatch: { flex: 1, minWidth: 0, height: 44, borderRadius: 6, alignItems: 'center', justifyContent: 'center' },
-  swatchRing: { position: 'absolute', top: -4, right: -4, bottom: -4, left: -4, borderRadius: 9, borderWidth: 2, borderColor: p.ink },
+  swatches: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, paddingVertical: 2 },
+  swatch: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  swatchSelected: { boxShadow: `0 0 0 3px ${p.paper}, 0 0 0 5px ${p.ink}` },
+  shadeBlock: { gap: 8 },
+  shades: { flexDirection: 'row', gap: 6 },
+  shade: { flex: 1, height: 40, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  shadeSelected: { boxShadow: `0 0 0 2px ${p.paper}, 0 0 0 4px ${p.ink}` },
+  codeToggle: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 40 },
+  codeToggleText: { flex: 1, color: p.muted, fontSize: 13, fontWeight: '600' },
   preview: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, minWidth: 0 },
-  previewIcon: { width: 42, height: 42, borderRadius: 6, alignItems: 'center', justifyContent: 'center' },
+  previewIcon: { width: 46, height: 46, borderRadius: 23, alignItems: 'center', justifyContent: 'center' },
   previewText: { flex: 1, minWidth: 0, gap: 4 }, previewName: { color: p.ink, fontSize: 13.4, fontWeight: '600' },
   small: { color: p.muted, fontSize: 11.5, lineHeight: 18 },
   hexField: { gap: 7, minWidth: 0 }, hexLabel: { color: p.ink, fontSize: 12.5, fontWeight: '600' },

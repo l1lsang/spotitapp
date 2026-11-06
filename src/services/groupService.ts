@@ -3,8 +3,10 @@ import {
   collection, doc, getDoc, increment, onSnapshot, query, runTransaction, serverTimestamp, where, writeBatch,
   type DocumentSnapshot,
 } from 'firebase/firestore'
+import { httpsCallable } from 'firebase/functions'
 import { requireDb } from '../lib/firebase'
-import { getGroupInputError, isGroupInviteCode, normalizeGroupInviteCode, type GroupInput, type PinGroup } from '../types/group'
+import { getGroupInputError, isGroupInviteCode, normalizeGroupInviteCode, type GroupBan, type GroupInput, type GroupMember, type GroupRole, type PinGroup } from '../types/group'
+import { functionsClient } from './moderationService'
 
 function toGroup(item: DocumentSnapshot): PinGroup | null {
   if (!item.exists()) return null
@@ -99,7 +101,58 @@ export async function setGroupMembership(groupId: string, uid: string, joined: b
   }) } catch (error) {
     // A concurrent request may have committed the same join/leave before rules evaluate this write.
     // Only acknowledge success after reading the requested state under this user's own permissions.
-    if ((error as { code?: string }).code === 'permission-denied' && (await getDoc(memberRef)).exists() === joined) return
+    if ((error as { code?: string }).code === 'permission-denied') {
+      if ((await getDoc(memberRef)).exists() === joined) return
+      if (joined && (await getDoc(doc(groupRef, 'bans', uid)).catch(() => null))?.exists()) {
+        throw new Error('이 그룹에서 내보내진 상태라 다시 가입할 수 없어요.', { cause: error })
+      }
+    }
     throw error
   }
+}
+
+async function groupCall<T>(name: string, data: object): Promise<T> {
+  try { return (await httpsCallable<object, T>(functionsClient(), name)(data)).data }
+  catch (error) {
+    const code = (error as { code?: string }).code
+    if (code === 'functions/internal' || code === 'functions/unavailable' || code === 'functions/not-found') throw new Error('서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.', { cause: error })
+    throw error
+  }
+}
+
+/** Opens the group's own room, creating it on first use; members only. */
+export async function openGroupChat(groupId: string): Promise<string> {
+  return (await groupCall<{ chatId: string }>('openGroupChat', { groupId })).chatId
+}
+
+export function listGroupMembers(groupId: string) {
+  return groupCall<{ members: GroupMember[]; viewerRole: GroupRole }>('manageGroup', { groupId, action: 'listMembers' })
+}
+
+export async function updateGroupInfo(groupId: string, input: Pick<GroupInput, 'name' | 'description'>): Promise<void> {
+  const error = getGroupInputError(input)
+  if (error) throw new Error(error)
+  await groupCall('manageGroup', { groupId, action: 'update', name: input.name.trim(), description: input.description.trim() })
+}
+
+export async function setGroupAdmin(groupId: string, uid: string, isAdmin: boolean): Promise<void> {
+  await groupCall('manageGroup', { groupId, action: 'setAdmin', uid, admin: isAdmin })
+}
+
+/** With ban, the person also cannot join again, even with an invite code, until unbanned. */
+export async function removeGroupMember(groupId: string, uid: string, ban = false): Promise<void> {
+  await groupCall('manageGroup', { groupId, action: 'removeMember', uid, ban })
+}
+
+export async function listGroupBans(groupId: string): Promise<GroupBan[]> {
+  return (await groupCall<{ bans: GroupBan[] }>('manageGroup', { groupId, action: 'listBans' })).bans
+}
+
+export async function unbanGroupMember(groupId: string, uid: string): Promise<void> {
+  await groupCall('manageGroup', { groupId, action: 'unban', uid })
+}
+
+/** Owner only. Pins stay with their authors; the group room is deleted with the group. */
+export async function deleteGroup(groupId: string, confirmName: string): Promise<void> {
+  await groupCall('manageGroup', { groupId, action: 'delete', confirmName })
 }

@@ -12,6 +12,8 @@ export interface DaymarkChat {
   id: string
   kind?: 'direct' | 'group'
   name?: string
+  /** Set on a group's own room; membership follows the group and is managed by the server. */
+  groupId?: string
   ownerUid?: string
   participantIds: string[]
   participants: Record<string, ChatParticipant>
@@ -33,5 +35,7 @@ export interface ChatMessage {
   photoUrl?: string
   photoName?: string
   reactionsBy?: Record<string, ChatReactionEmoji>
+  /** Group-chat tags: "@nickname" as written in content → tagged member uid. */
+  mentions?: Record<string, string>
   createdAt?: Timestamp
 }

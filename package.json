@@ -93,7 +93,7 @@
     "licenses:check": "node scripts/generate-open-source-licenses.mjs --check",
     "dev-client": "expo start --dev-client",
     "release:publish": "node --experimental-strip-types scripts/publish-app-release.mjs",
-    "test": "node --import ./tests/register-types.mjs --test tests/signupRequirements.test.mjs tests/maps.test.mjs tests/chatReadReceipts.test.mjs tests/chatReactions.test.mjs tests/chatPinShare.test.mjs tests/appRelease.test.mjs tests/publishAppRelease.test.mjs tests/photoMetadata.test.mjs tests/pinThemes.test.mjs tests/mapFeedChat.test.mjs tests/userSearch.test.mjs tests/postSearch.test.mjs tests/contentFilter.test.mjs",
+    "test": "node --import ./tests/register-types.mjs --test tests/signupRequirements.test.mjs tests/maps.test.mjs tests/chatReadReceipts.test.mjs tests/chatReactions.test.mjs tests/chatPinShare.test.mjs tests/appRelease.test.mjs tests/publishAppRelease.test.mjs tests/photoMetadata.test.mjs tests/pinThemes.test.mjs tests/mapFeedChat.test.mjs tests/userSearch.test.mjs tests/postSearch.test.mjs tests/contentFilter.test.mjs tests/chatMentions.test.mjs tests/chatLinks.test.mjs",
     "go": "expo start --go"
   },
   "private": true

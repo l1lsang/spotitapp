@@ -13,5 +13,6 @@ export async function nativeAppleSignIn(rawNonce: string, state: string): Promis
     idToken: result.identityToken,
     state: result.state,
     displayName: result.fullName ? apple.formatFullName(result.fullName).trim() : undefined,
+    authorizationCode: result.authorizationCode || undefined,
   }
 }

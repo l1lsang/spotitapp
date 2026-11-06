@@ -3,7 +3,7 @@ import { emulatorHost, firebaseApp } from '../lib/firebase'
 import type { AdminUser, CaseStatus, ModerationCase, ReportTarget } from '../types/moderation'
 
 let instance: Functions | undefined
-function client() {
+export function functionsClient() {
   if (!firebaseApp) throw new Error('Firebase 연결 설정을 확인해 주세요.')
   if (!instance) {
     instance = getFunctions(firebaseApp, 'us-central1')
@@ -12,7 +12,7 @@ function client() {
   return instance
 }
 export async function moderationCall<T>(name: string, data: object = {}): Promise<T> {
-  try { return (await httpsCallable<object, T>(client(), name)(data)).data }
+  try { return (await httpsCallable<object, T>(functionsClient(), name)(data)).data }
   catch (error) {
     const code = (error as { code?: string }).code
     if (code === 'functions/internal' || code === 'functions/unavailable' || code === 'functions/not-found') throw new Error('관리 서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.', { cause: error })

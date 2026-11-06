@@ -268,6 +268,17 @@ function addDeleteOperation(
   operations.push((batch) => batch.delete(reference))
 }
 
+/** Removes the placeholder profile of a member who signed in but never finished signup. */
+export async function deleteIncompleteAccountData(uid: string): Promise<void> {
+  const db = requireDb()
+  const batch = writeBatch(db)
+  batch.delete(doc(db, 'users', uid, 'private', 'registration'))
+  batch.delete(doc(db, 'users', uid, 'private', 'locationConsent'))
+  batch.delete(doc(db, 'users', uid))
+  await batch.commit()
+  invalidateAppReads()
+}
+
 export async function deleteUserAccountData(uid: string): Promise<void> {
   const db = requireDb()
   const memberships = await getDocs(collection(db, 'users', uid, 'groupMemberships'))

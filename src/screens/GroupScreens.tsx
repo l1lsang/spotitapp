@@ -1,25 +1,28 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, Share, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { Text } from '../components/Typography';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
-import { ArrowLeft, Check, Compass, Copy, Globe2, KeyRound, Lock, Map, MapPin, Plus, Share2, UsersRound } from 'lucide-react-native';
+import { ArrowLeft, Check, Compass, Copy, Globe2, KeyRound, Lock, Map, MapPin, MessageCircle, Plus, Send, Settings, UsersRound } from 'lucide-react-native';
 import { Button, Empty, Field, IconButton, Notice, Screen, SearchBox, p, s } from '../components/ui';
 import { Dialog } from '../components/Dialog';
+import { GroupManageDialog } from '../components/GroupManageDialog';
+import { SendSheet } from '../components/SendSheet';
+import { createGroupShareMessage, getShareUrl } from '../lib/chatPinShare';
 import { PostCard } from '../components/PostCard';
 import { useAuth } from '../hooks/useAuth';
 import { useBlockedUsers, withoutBlocked } from '../hooks/useBlockedUsers';
 import { useGroups } from '../hooks/useGroups';
-import { createGroup, getGroupInviteCode, joinGroupWithCode, setGroupMembership } from '../services/groupService';
+import { createGroup, getGroupInviteCode, joinGroupWithCode, openGroupChat, setGroupMembership } from '../services/groupService';
 import { subscribeGroupPosts } from '../services/postService';
-import { getGroupInputError, isGroupInviteCode, normalizeGroupInviteCode, type GroupVisibility, type PinGroup } from '../types/group';
+import { GROUP_ROLE_LABELS, getGroupInputError, getGroupRole, isGroupInviteCode, normalizeGroupInviteCode, type GroupVisibility, type PinGroup } from '../types/group';
 import type { Post } from '../types/post';
 
 const errorText = (e: unknown) => e instanceof Error ? e.message : '처리하지 못했습니다. 다시 시도해 주세요.';
 function BackLink({ title, to }: { title: string; to: '/map' | '/groups' }) {
   return <Pressable accessibilityRole="link" style={[s.row, { gap: 7, minHeight: 44, alignSelf: 'flex-start' }]} onPress={() => router.push(to)}><ArrowLeft size={17} color={p.muted} /><Text style={{ color: p.muted, fontSize: 14.4 }}>{title}</Text></Pressable>;
 }
-export function JoinGroupButton({ group, joined, allowLeave = false, compact = false, tone }: { group: Pick<PinGroup, 'id' | 'visibility'>; joined: boolean; allowLeave?: boolean; compact?: boolean; tone?: 'outline' | 'plain' | 'ghost' }) {
+export function JoinGroupButton({ group, joined, allowLeave = false, compact = false, tone, initialCode = '' }: { group: Pick<PinGroup, 'id' | 'visibility'>; joined: boolean; allowLeave?: boolean; compact?: boolean; tone?: 'outline' | 'plain' | 'ghost'; initialCode?: string }) {
   const { currentUser } = useAuth();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -36,16 +39,16 @@ export function JoinGroupButton({ group, joined, allowLeave = false, compact = f
   return <View style={{ gap: 8, maxWidth: compact ? 240 : undefined }}>
     <Button title={busy ? '처리 중…' : joined ? allowLeave ? '그룹 탈퇴' : '가입 완료' : group.visibility === 'private' ? '코드로 가입' : '바로 가입'} variant={joined ? 'secondary' : 'primary'} tone={tone} style={compact ? g.compactButton : undefined} disabled={busy || !currentUser || (joined && !allowLeave)} icon={joined ? <Check size={17} color={p.ink} /> : <Plus size={17} color={p.paper} />} onPress={() => void change()} />
     {!!error && <Notice error>{error}</Notice>}
-    <JoinGroupDialog visible={joining} groupId={group.id} onClose={() => setJoining(false)} onJoined={() => setJoining(false)} />
+    <JoinGroupDialog visible={joining} groupId={group.id} initialCode={initialCode} onClose={() => setJoining(false)} onJoined={() => setJoining(false)} />
   </View>;
 }
-function JoinGroupDialog({ visible, groupId, onClose, onJoined }: { visible: boolean; groupId?: string; onClose: () => void; onJoined: (id: string) => void }) {
+function JoinGroupDialog({ visible, groupId, initialCode = '', onClose, onJoined }: { visible: boolean; groupId?: string; initialCode?: string; onClose: () => void; onJoined: (id: string) => void }) {
   const { currentUser } = useAuth();
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const pending = useRef(false);
-  useEffect(() => { if (visible) { setCode(''); setError(''); } }, [visible]);
+  useEffect(() => { if (visible) { setCode(initialCode); setError(''); } }, [visible, initialCode]);
   async function join() {
     if (!currentUser || pending.current) return;
     pending.current = true; setBusy(true); setError('');
@@ -150,7 +153,7 @@ export function GroupsScreen() {
   </Screen>;
 }
 export function GroupDetailScreen() {
-  const { groupId = '' } = useLocalSearchParams<{ groupId: string }>();
+  const { groupId = '', code: sharedCode = '' } = useLocalSearchParams<{ groupId: string; code?: string }>();
   const { currentUser, firebaseReady } = useAuth();
   const catalog = useGroups();
   const { width } = useWindowDimensions();
@@ -164,8 +167,17 @@ export function GroupDetailScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
-  const [shareMessage, setShareMessage] = useState('');
   const [gridWidth, setGridWidth] = useState(0);
+  const [sharing, setSharing] = useState(false);
+  const [managing, setManaging] = useState(false);
+  const [invite, setInvite] = useState({ key: '', code: '', error: '' });
+  const [inviteRevision, setInviteRevision] = useState(0);
+  const inviteKey = `${groupId}:${inviteRevision}`;
+  const inviteCode = invite.key === inviteKey ? invite.code : '';
+  const inviteError = invite.key === inviteKey ? invite.error : '';
+  const [chatBusy, setChatBusy] = useState(false);
+  const [chatError, setChatError] = useState('');
+  const role = group && joined ? getGroupRole(group, currentUser?.uid) : 'member';
   const map = () => router.push({ pathname: '/map', params: { group: groupId } });
   useEffect(() => {
     setPosts([]); setError('');
@@ -173,13 +185,26 @@ export function GroupDetailScreen() {
     setLoading(true);
     return subscribeGroupPosts(groupId, next => { setPosts(next); setLoading(false); }, () => { setPosts([]); setError('그룹 핀을 불러오지 못했습니다.'); setLoading(false); }, group?.visibility);
   }, [groupId, currentUser?.uid, firebaseReady, canRead, group?.visibility, revision]);
-  async function share() {
-    const url = (process.env.EXPO_PUBLIC_WEB_URL || 'https://www.pinori.kr').replace(/\/$/, '') + '/groups/' + groupId;
-    try { await Share.share({ title: group?.name, message: (group?.visibility === 'private' ? '함께 장소를 모아요. 그룹 멤버에게 초대코드를 받아 가입해 주세요.' : '함께 장소를 모아요. 초대코드 없이 바로 가입할 수 있어요.') + '\n' + url }); }
-    catch { setShareMessage('공유하지 못했습니다. 다시 시도해 주세요.'); }
+  // Private groups are sent with their invite code, which only members can read.
+  useEffect(() => {
+    if (!sharing || group?.visibility !== 'private' || !joined) return;
+    let active = true;
+    void getGroupInviteCode(groupId).then(code => { if (active) setInvite({ key: inviteKey, code, error: '' }); }, () => { if (active) setInvite({ key: inviteKey, code: '', error: '초대코드를 불러오지 못했어요.' }); });
+    return () => { active = false; };
+  }, [sharing, groupId, group?.visibility, joined, inviteKey]);
+  const shareMessage = useMemo(() => {
+    if (!group || (group.visibility === 'private' && !inviteCode)) return null;
+    try { return createGroupShareMessage(group, inviteCode); } catch { return null; }
+  }, [group, inviteCode]);
+  async function openChat() {
+    if (chatBusy) return;
+    setChatBusy(true); setChatError('');
+    try { const chatId = await openGroupChat(groupId); router.push({ pathname: '/chats/[chatId]', params: { chatId } }); }
+    catch (e) { setChatError(errorText(e)); }
+    finally { setChatBusy(false); }
   }
   if (catalog.loading) return <Screen><Text style={g.emptyText}>그룹을 불러오는 중입니다.</Text></Screen>;
-  if (catalog.error || !group || !canRead) return <Screen><Empty title={catalog.error ? '그룹을 불러오지 못했어요' : '가입이 필요하거나 찾을 수 없는 그룹이에요'} description={catalog.error || '비공개 그룹은 초대코드로 가입한 뒤 볼 수 있어요.'} />{catalog.error ? <Button title="다시 시도" variant="secondary" onPress={catalog.retry} /> : <JoinGroupButton group={{ id: groupId, visibility: 'private' }} joined={false} />}<Button title="그룹 둘러보기" onPress={() => router.push('/groups')} /></Screen>;
+  if (catalog.error || !group || !canRead) return <Screen><Empty title={catalog.error ? '그룹을 불러오지 못했어요' : '가입이 필요하거나 찾을 수 없는 그룹이에요'} description={catalog.error || '비공개 그룹은 초대코드로 가입한 뒤 볼 수 있어요.'} />{catalog.error ? <Button title="다시 시도" variant="secondary" onPress={catalog.retry} /> : <>{!!sharedCode && <Text style={g.note}>채팅으로 받은 초대코드가 입력돼 있어요.</Text>}<JoinGroupButton group={{ id: groupId, visibility: 'private' }} joined={false} initialCode={typeof sharedCode === 'string' ? sharedCode : ''} /></>}<Button title="그룹 둘러보기" onPress={() => router.push('/groups')} /></Screen>;
   // Same column rule as the web grid: as many 280px cards as fit, one column on phones.
   const columns = width <= 620 ? 1 : Math.max(1, Math.floor((gridWidth + 24) / 304));
   const cardWidth = gridWidth ? (gridWidth - (columns - 1) * 24) / columns : undefined;
@@ -189,18 +214,23 @@ export function GroupDetailScreen() {
       <View style={[s.row, { gap: narrow ? 12 : 18 }]}>
         <View style={[g.symbol, { width: 46, height: 46, borderRadius: 23 }]}>{group.visibility === 'private' ? <Lock size={30} color={p.primary} /> : <Compass size={30} color={p.primary} />}</View>
         <View style={{ flex: 1, minWidth: 0, gap: 7 }}><Text style={g.eyebrow}>{group.visibility === 'private' ? '비공개 그룹' : '공개 그룹'}</Text><Text accessibilityRole="header" style={[g.homeTitle, !narrow && { fontSize: 32, lineHeight: 40 }]}>{group.name}</Text></View>
-        <IconButton label="그룹 공유" variant="round" onPress={() => void share()}><Share2 size={19} color={p.ink} /></IconButton>
+        {role !== 'member' && <IconButton label="그룹 관리" variant="round" onPress={() => setManaging(true)}><Settings size={19} color={p.ink} /></IconButton>}
+        <IconButton label="그룹 보내기" variant="round" onPress={() => setSharing(true)}><Send size={19} color={p.ink} /></IconButton>
       </View>
       {!!group.description && <Text style={g.groupDescription}>{group.description}</Text>}
       <View style={[g.homeFooter, !narrow && { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}>
         <View style={[s.row, { flexWrap: 'wrap', gap: 14 }]}>
           <View style={[s.row, { gap: 6 }]}><UsersRound size={16} color={p.muted} /><Text style={g.small}>멤버 {group.memberCount}명</Text></View>
           <View style={[s.row, { gap: 6 }]}><MapPin size={16} color={p.muted} /><Text style={g.small}>{loading ? '핀 불러오는 중' : `핀 ${posts.length}개`}</Text></View>
-          {group.ownerUid === currentUser?.uid && <Text style={g.pill}>내가 만든 그룹</Text>}
+          {role !== 'member' && <Text style={g.pill}>{GROUP_ROLE_LABELS[role]}</Text>}
         </View>
-        <JoinGroupButton group={group} joined={joined} allowLeave tone="plain" />
+        <View style={[s.row, { flexWrap: 'wrap', gap: 8 }]}>
+          {joined && <Button title={chatBusy ? '여는 중…' : '그룹 채팅'} icon={<MessageCircle size={17} color={p.paper} />} loading={chatBusy} onPress={() => void openChat()} />}
+          {role !== 'owner' && <JoinGroupButton group={group} joined={joined} allowLeave tone="plain" />}
+        </View>
       </View>
-      {!!shareMessage && <Text accessibilityLiveRegion="polite" style={g.note}>{shareMessage}</Text>}
+      {!!chatError && <Notice error>{chatError}</Notice>}
+      {role === 'owner' && <Text style={g.small}>그룹장은 탈퇴할 수 없어요. 그룹을 정리하려면 그룹 관리에서 삭제해 주세요.</Text>}
     </View>
     {joined && group.visibility === 'private' && <GroupInvitePanel groupId={groupId} />}
     <View style={[g.participation, !narrow && { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}>
@@ -212,6 +242,14 @@ export function GroupDetailScreen() {
     {loading && <Text style={g.emptyText}>그룹 핀을 불러오는 중입니다.</Text>}
     {!loading && !error && !posts.length && <View style={g.empty}><MapPin size={30} color={p.muted} strokeWidth={1.3} /><Empty title="아직 모은 핀이 없어요" description={joined ? '지도 탭에서 좋아하는 장소에 이 그룹의 첫 핀을 남겨보세요.' : '가입하고 이 그룹의 첫 장소를 소개해 보세요.'} /></View>}
     {posts.length > 0 && <View onLayout={event => setGridWidth(event.nativeEvent.layout.width)} style={g.grid}>{posts.map(post => <View key={post.id} style={{ width: cardWidth ?? '100%' }}><PostCard post={post} /></View>)}</View>}
+    <SendSheet visible={sharing} onClose={() => setSharing(false)} message={shareMessage}
+      link={{ url: getShareUrl('groups', groupId), text: group.visibility === 'private' ? `피노리 그룹 '${group.name}'에 초대해요.` : `피노리 그룹 '${group.name}'에서 함께 장소를 모아요.` }}
+      prepare={inviteError ? { error: inviteError, retry: () => setInviteRevision(value => value + 1) } : undefined}
+      preview={<>
+        <View style={[g.symbol, { borderRadius: 10 }]}>{group.visibility === 'private' ? <Lock size={22} color={p.primary} /> : <Compass size={22} color={p.primary} />}</View>
+        <View style={{ flex: 1, minWidth: 0, gap: 2 }}><Text numberOfLines={1} style={g.label}>{group.name}</Text><Text numberOfLines={1} style={g.small}>{group.visibility === 'private' ? '비공개 그룹 · 초대코드가 함께 전송돼요' : `공개 그룹 · 멤버 ${group.memberCount}명`}</Text></View>
+      </>} />
+    {role !== 'member' && currentUser && <GroupManageDialog visible={managing} group={group} viewerUid={currentUser.uid} onClose={() => setManaging(false)} onDeleted={() => { setManaging(false); router.replace('/groups'); }} />}
   </Screen>;
 }
 function GroupInvitePanel({ groupId }: { groupId: string }) {

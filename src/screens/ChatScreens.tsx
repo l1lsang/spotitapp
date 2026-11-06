@@ -2,12 +2,13 @@ import * as Clipboard from 'expo-clipboard';
 import { FlipType, ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { ArrowLeft, ArrowUpRight, Ban, Check, ChevronLeft, ChevronRight, Copy, Flag, ImagePlus, Images, MapPin, MessageCircle, MoreHorizontal, Pin, PinOff, RefreshCw, SendHorizontal, ShieldAlert, UserPlus, UsersRound, X } from 'lucide-react-native';
+import { ArrowLeft, ArrowUpRight, Ban, Check, ChevronLeft, ChevronRight, Compass, Copy, Flag, ImagePlus, Images, MapPin, MessageCircle, MoreHorizontal, Pin, PinOff, RefreshCw, SendHorizontal, ShieldAlert, UserPlus, UsersRound, X } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ActivityIndicator, Alert, AppState, FlatList, Image, Keyboard, Pressable, StyleSheet, View, useWindowDimensions, type StyleProp, type ViewStyle } from 'react-native';
+import { ActivityIndicator, Alert, AppState, FlatList, Image, Keyboard, Linking, Pressable, StyleSheet, View, useWindowDimensions, type GestureResponderEvent, type StyleProp, type ViewStyle } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { blockNotice } from '../components/BlockUserDialog';
 import { DirectChatDialog } from '../components/chat/DirectChatDialog';
+import { MessageActionOverlay, type MessageAction } from '../components/chat/MessageActionOverlay';
 import { NewChatFab } from '../components/chat/NewChatFab';
 import { Dialog } from '../components/Dialog';
 import { KeyboardPane, useKeyboardVisible } from '../components/keyboard';
@@ -20,8 +21,10 @@ import { useBlockedUsers, withoutBlocked } from '../hooks/useBlockedUsers';
 import { usePeopleSearch } from '../hooks/usePeopleSearch';
 import { getDirectChatPartnerIds } from '../lib/chatCandidates';
 import { getChatMedia, getPinnedChatMessages } from '../lib/chatCollections';
-import { getSharedPinFromMessage } from '../lib/chatPinShare';
-import { CHAT_REACTION_OPTIONS, getChatReactionSummaries } from '../lib/chatReactions';
+import { collectChatMentions, filterMentionCandidates, getActiveChatMention, getChatTextSegments, insertChatMention } from '../lib/chatMentions';
+import { getLinkSegments } from '../lib/chatLinks';
+import { getSharedGroupFromMessage, getSharedPinFromMessage } from '../lib/chatPinShare';
+import { getChatReactionSummaries } from '../lib/chatReactions';
 import { getMessageReaders } from '../lib/chatReadReceipts';
 import { formatChatDateSeparator, formatChatTime, formatTimestamp, getTimestampDateKey } from '../lib/date';
 import { blockUser, type BlockTarget } from '../services/blockService';
@@ -99,11 +102,11 @@ export function ChatListScreen() {
       {!!error && <View style={styles.errorBlock}><Notice error>{error}</Notice><Button title="다시 시도" variant="secondary" icon={<RefreshCw size={17} color={p.ink} />} style={{ alignSelf: 'flex-start' }} onPress={() => setRevision(value => value + 1)} /></View>}
       {loading && <ActivityIndicator color={p.primary} style={{ marginTop: 24 }} />}
       {!loading && !chats.length && <View style={{ alignItems: 'center', paddingVertical: 38, gap: 16 }}><MessageCircle size={34} color={p.muted} strokeWidth={1.3} /><Empty title="아직 채팅이 없습니다." description="사람 찾기에서 대화를 시작해 보세요." /><Button title="사람 찾기" icon={<UsersRound size={17} color={p.paper} />} onPress={() => router.push('/people')} /></View>}
-      {chats.length > 0 && <View accessibilityLabel="채팅 목록" style={styles.chatList}>{chats.map((chat, index) => {
+      {chats.length > 0 && <View accessibilityLabel="채팅 목록" style={styles.chatList}>{chats.map(chat => {
         const other = getOtherParticipant(chat, uid || '')
         const unread = Boolean(chat.lastMessageUid !== uid && chat.lastMessageAt && (!chat.readAtBy?.[uid || ''] || chat.lastMessageAt.toMillis() > chat.readAtBy[uid || ''].toMillis()))
         const lastMessage = chat.lastMessage ? (chat.lastMessageUid === uid ? '나: ' : '') + chat.lastMessage : '새 대화를 시작해 보세요.'
-        return <Pressable key={chat.id} style={({ pressed }) => [styles.chatRow, index > 0 && styles.chatRowSeparator, pressed && styles.chatRowPressed]} accessibilityRole="button" accessibilityLabel={`${roomName(chat, uid || '')}${unread ? ', 읽지 않은 메시지' : ''}`} onPress={() => router.push({ pathname: '/chats/[chatId]', params: { chatId: chat.id } })}>
+        return <Pressable key={chat.id} style={({ pressed }) => [styles.chatRow, pressed && styles.chatRowPressed]} accessibilityRole="button" accessibilityLabel={`${roomName(chat, uid || '')}${unread ? ', 읽지 않은 메시지' : ''}`} onPress={() => router.push({ pathname: '/chats/[chatId]', params: { chatId: chat.id } })}>
           {chat.kind === 'group' ? <GroupAvatar size={48} /> : <Avatar uri={other?.photoURL} name={other?.nickname} size={48} />}
           <View style={styles.chatRowContent}>
             <Text style={[styles.chatTitle, unread && { color: p.primaryHover }]} numberOfLines={1}>{roomName(chat, uid || '')}</Text>
@@ -145,7 +148,7 @@ export function ChatRoomScreen() {
   const chatId = Array.isArray(params.chatId) ? params.chatId[0] : params.chatId
   const router = useRouter()
   const insets = useSafeAreaInsets()
-  const { width } = useWindowDimensions()
+  const { width, height } = useWindowDimensions()
   const keyboardVisible = useKeyboardVisible()
   const { currentUser, profile, firebaseReady } = useAuth()
   const uid = currentUser?.uid
@@ -160,12 +163,17 @@ export function ChatRoomScreen() {
   const [error, setError] = useState('')
   const [messageError, setMessageError] = useState('')
   const [content, setContent] = useState('')
+  const [selection, setSelection] = useState({ start: 0, end: 0 })
+  const [pickedMentions, setPickedMentions] = useState<Record<string, string>>({})
+  const [dismissedMention, setDismissedMention] = useState('')
+  const input = useRef<TextInput>(null)
   const [photo, setPhoto] = useState<UploadPhoto | null>(null)
   const [sending, setSending] = useState(false)
   const [editing, setEditing] = useState(false)
   const [editorOpen, setEditorOpen] = useState(false)
   const [sheet, setSheet] = useState<RoomSheet>(null)
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null)
+  const [actionAnchorY, setActionAnchorY] = useState(0)
   const [reactingMessageId, setReactingMessageId] = useState<string | null>(null)
   const [selectedPhoto, setSelectedPhoto] = useState<ChatMessage | null>(null)
   const [highlightedId, setHighlightedId] = useState('')
@@ -195,6 +203,12 @@ export function ChatRoomScreen() {
   const candidates = inviteSearch.people.filter(user => !chat?.participantIds.includes(user.uid))
   const latest = messages[messages.length - 1]
   const selectedMessage = messages.find(message => message.id === selectedMessageId) || null
+  // Group rooms: typing "@" lists the other members to tag.
+  const activeMention = chat?.kind === 'group' && composerFocused && !sending && selection.start === selection.end ? getActiveChatMention(content, Math.min(selection.start, content.length)) : null
+  const mentionKey = activeMention ? `${activeMention.start}:${activeMention.query}` : ''
+  const mentionCandidates = activeMention && mentionKey !== dismissedMention && chat && uid
+    ? filterMentionCandidates(chat.participantIds.flatMap(id => chat.participants[id] ? [{ ...chat.participants[id], uid: id }] : []), activeMention.query, uid)
+    : []
   // Phones: the 100px header of the mobile design includes the status bar area.
   const narrow = width <= 480
   const headerMinHeight = width <= 640 ? Math.max(0, 100 - insets.top) : undefined
@@ -207,7 +221,7 @@ export function ChatRoomScreen() {
   }, [])
   useEffect(() => () => { if (retryJump.current) clearTimeout(retryJump.current) }, [])
   useEffect(() => {
-    setChat(null); setMessages([]); setError(''); setContent(''); setPhoto(null); setSheet(null); setSelectedMessageId(null)
+    setChat(null); setMessages([]); setError(''); setContent(''); setPickedMentions({}); setPhoto(null); setSheet(null); setSelectedMessageId(null)
     if (!uid || !firebaseReady || !chatId) { setLoading(false); return }
     setLoading(true)
     return subscribeToChat(chatId, uid, next => { setChat(next); setLoading(false); if (!next) setError('참여 중인 채팅방을 찾을 수 없습니다.') }, e => { setError(e.message); setLoading(false) })
@@ -273,8 +287,9 @@ export function ChatRoomScreen() {
     sendLock.current = true; setSending(true); setError('')
     try {
       const photoUrl = photo ? await uploadChatPhoto(profile.uid, chat.id, photo) : ''
-      await sendChatMessage(chat.id, profile, content, photo ? { photoUrl, photoName: photo.name || '사진' } : undefined)
-      setContent(''); setPhoto(null); atBottom.current = true
+      const mentions = chat.kind === 'group' ? collectChatMentions(content, pickedMentions, chat.participantIds) : {}
+      await sendChatMessage(chat.id, profile, content, { ...(photo ? { photoUrl, photoName: photo.name || '사진' } : {}), mentions })
+      setContent(''); setPickedMentions({}); setPhoto(null); atBottom.current = true
       list.current?.scrollToOffset({ offset: 0, animated: true })
     } catch (e) { setError(errorText(e)) }
     finally { sendLock.current = false; setSending(false) }
@@ -320,6 +335,14 @@ export function ChatRoomScreen() {
     setSheet(null); setSelectedPhoto(null); setHighlightedId(messageId); atBottom.current = false
     requestAnimationFrame(() => list.current?.scrollToIndex({ index, animated: false, viewPosition: 0.5 }))
   }
+  function chooseMention(person: ChatParticipant) {
+    if (!activeMention) return
+    const next = insertChatMention(content, activeMention, person.nickname)
+    if (next.content.length > 4000) return
+    setContent(next.content); setSelection({ start: next.cursor, end: next.cursor }); setDismissedMention('')
+    setPickedMentions(current => ({ ...current, [`@${person.nickname.trim()}`]: person.uid }))
+    requestAnimationFrame(() => { input.current?.focus(); input.current?.setNativeProps({ selection: { start: next.cursor, end: next.cursor } }) })
+  }
   function openReport(target: ReportTarget) { setReportTarget(target); setReason(REPORT_REASONS[0].id); setDetails(''); show('report') }
   async function report() {
     if (!reportTarget || busy) return
@@ -343,6 +366,16 @@ export function ChatRoomScreen() {
   const readers = selectedMessage && chat ? getMessageReaders(selectedMessage, chat) : []
   const titles: Record<Exclude<RoomSheet, null>, string> = { menu: '채팅방 메뉴', invite: '단체방 초대', pins: `고정 메시지 ${pinned.length}`, media: `미디어 모아보기 ${media.length}`, actions: '메시지 메뉴', readers: `읽은 사람 ${readers.length}`, report: '신고하기', block: `${blockTarget?.nickname || '사용자'}님을 차단할까요?`, photo: '사진 보기' }
   const selectedIndex = media.findIndex(message => message.id === selectedPhoto?.id)
+  const actionMine = selectedMessage?.uid === uid
+  const actionPinned = !!selectedMessage && !!chat?.pinnedMessageIds?.includes(selectedMessage.id)
+  const actionDisabled = busy || reactingMessageId !== null
+  const messageActions: MessageAction[] = selectedMessage && chat ? [
+    { key: 'pin', label: busy ? '변경 중…' : actionPinned ? '고정 해제' : '고정', icon: color => actionPinned ? <PinOff size={23} strokeWidth={1.8} color={color} /> : <Pin size={23} strokeWidth={1.8} color={color} />, onPress: () => void togglePin() },
+    ...(selectedMessage.content ? [{ key: 'copy', label: '복사', icon: (color: string) => <Copy size={23} strokeWidth={1.8} color={color} />, onPress: () => { void Clipboard.setStringAsync(selectedMessage.content).then(() => setSheet(null)).catch(e => setSheetError(errorText(e))) } }] : []),
+    ...(!actionMine ? [{ key: 'report', label: '신고', danger: true, icon: (color: string) => <Flag size={23} strokeWidth={1.8} color={color} />, onPress: () => openReport({ kind: 'chat', targetId: chatId, messageId: selectedMessage.id, label: `${selectedMessage.authorNickname}의 메시지` }) }] : []),
+    ...(!actionMine && selectedMessage.photoUrl ? [{ key: 'report-photo', label: '사진 신고', danger: true, icon: (color: string) => <Flag size={23} strokeWidth={1.8} color={color} />, onPress: () => reportPhoto(selectedMessage) }] : []),
+    ...(!actionMine ? [{ key: 'block', label: '차단', danger: true, icon: (color: string) => <Ban size={23} strokeWidth={1.8} color={color} />, onPress: () => openBlock({ uid: selectedMessage.uid, nickname: selectedMessage.authorNickname, photoURL: chat.participants[selectedMessage.uid]?.photoURL }) }] : []),
+  ] : []
 
   if (loading || !uid || !chat) return <Screen title="채팅" back>{loading ? <ActivityIndicator color={p.primary} style={{ margin: 40 }} /> : <><Empty title={uid ? '채팅방을 열 수 없습니다' : '로그인이 필요해요'} />{error ? <Notice error>{error}</Notice> : null}<Button title={uid ? '다시 시도' : '로그인'} onPress={() => uid ? setRevision(value => value + 1) : router.push('/login')} /><Button title="채팅 목록" variant="secondary" onPress={() => router.replace('/chats')} /></>}</Screen>
 
@@ -356,7 +389,7 @@ export function ChatRoomScreen() {
       </Pressable>
       <View style={[styles.headerActions, { gap: narrow ? 0 : 4 }]}>
         <IconButton variant="surface" size={42} style={tool} label="미디어 모아보기" onPress={() => { setSelectedPhoto(null); show('media') }}><Images size={19} color={p.muted} /></IconButton>
-        {chat.kind === 'group' ? <IconButton variant="surface" size={42} style={tool} label="초대" onPress={() => void openInvite()}><UserPlus size={18} color={p.muted} /></IconButton> : null}
+        {chat.kind === 'group' && !chat.groupId ? <IconButton variant="surface" size={42} style={tool} label="초대" onPress={() => void openInvite()}><UserPlus size={18} color={p.muted} /></IconButton> : null}
         <IconButton variant="surface" size={42} style={[{ borderRadius: 21 }, tool]} label="채팅방 더보기" selected={sheet === 'menu'} onPress={() => show('menu')}><MoreHorizontal size={21} color={p.muted} /></IconButton>
       </View>
     </View>
@@ -375,13 +408,14 @@ export function ChatRoomScreen() {
         const mine = item.uid === uid
         const deleted = item.uid === 'deleted-user'
         const sharedPin = getSharedPinFromMessage(item.content)
+        const sharedGroup = sharedPin ? null : getSharedGroupFromMessage(item.content)
         const prev = reversed[index + 1]
         const dateKey = getTimestampDateKey(item.createdAt)
         const dayChanged = dateKey && (!prev || getTimestampDateKey(prev.createdAt) !== dateKey)
         const messageReaders = getMessageReaders(item, chat)
         const isPinned = chat.pinnedMessageIds?.includes(item.id)
         const reactions = deleted ? [] : getChatReactionSummaries(item.reactionsBy, uid)
-        const openActions = () => { if (!deleted) { setSelectedMessageId(item.id); show('actions') } }
+        const openActions = (event?: GestureResponderEvent) => { if (!deleted) { setActionAnchorY(event?.nativeEvent.pageY ?? height / 2); setSelectedMessageId(item.id); show('actions') } }
         const ink = mine ? p.paper : p.ink
         const accent = mine ? p.paper : p.primary
         return <View>
@@ -397,7 +431,11 @@ export function ChatRoomScreen() {
                   <View style={styles.inline}><MapPin size={17} color={accent} /><Text style={[styles.link, { color: accent }]}>공유한 핀</Text></View>
                   <Text style={[styles.messageText, { fontWeight: '600', color: ink }]}>{sharedPin.title}</Text><Text style={[styles.muted, mine && { color: p.paper }]}>{sharedPin.placeName}</Text>
                   <Text style={[styles.link, { color: accent }]}>핀 보기 →</Text>
-                </Pressable> : item.content ? <View style={[styles.bubble, mine && styles.mineBubble]}><Text style={[styles.messageText, { color: ink }]}>{item.content}</Text></View> : null}
+                </Pressable> : sharedGroup ? <Pressable accessibilityRole="link" accessibilityLabel={`${sharedGroup.name} 그룹 보기`} onPress={() => router.push({ pathname: '/groups/[groupId]', params: sharedGroup.inviteCode ? { groupId: sharedGroup.groupId, code: sharedGroup.inviteCode } : { groupId: sharedGroup.groupId } })} onLongPress={openActions} style={[styles.bubble, mine && styles.mineBubble, { gap: 8, minWidth: 190 }]}>
+                  <View style={styles.inline}><UsersRound size={17} color={accent} /><Text style={[styles.link, { color: accent }]}>그룹 초대</Text></View>
+                  <Text style={[styles.messageText, { fontWeight: '600', color: ink }]}>{sharedGroup.name}</Text><Text style={[styles.muted, mine && { color: p.paper }]}>{sharedGroup.detail}</Text>
+                  <Text style={[styles.link, { color: accent }]}>{sharedGroup.inviteCode ? '초대코드로 가입하기 →' : '그룹 보기 →'}</Text>
+                </Pressable> : item.content ? <View style={[styles.bubble, mine && styles.mineBubble]}><MessageText content={item.content} mentions={item.mentions} mine={mine} viewerUid={uid} /></View> : null}
               </Pressable>
               {reactions.length ? <View style={[styles.reactions, mine && { justifyContent: 'flex-end' }]}>
                 {reactions.map(reaction => <Pressable key={reaction.emoji} accessibilityRole="button" accessibilityLabel={`${reaction.label} ${reaction.count}명, ${reaction.selected ? '내 반응 취소' : '반응하기'}`} accessibilityState={{ selected: reaction.selected, disabled: reactingMessageId !== null || busy }} disabled={reactingMessageId !== null || busy} onPress={() => void reactToMessage(item, reaction.emoji)} style={({ pressed }) => [styles.reactionChip, reaction.selected && styles.reactionSelected, (pressed || reactingMessageId === item.id) && { opacity: 0.6 }]}>
@@ -424,17 +462,24 @@ export function ChatRoomScreen() {
         <View style={{ gap: 8 }}><Text style={styles.tiny}>선택한 사진</Text><View style={styles.inline}><Pressable disabled={editing || sending} onPress={() => { Keyboard.dismiss(); setEditorOpen(true) }}><Text style={styles.link}>사진 편집</Text></Pressable><Pressable disabled={editing || sending} onPress={() => void editPhoto('rotate')}><Text style={styles.link}>회전</Text></Pressable><Pressable disabled={editing || sending} onPress={() => void editPhoto('flip')}><Text style={styles.link}>반전</Text></Pressable>{editing ? <ActivityIndicator size="small" color={p.primary} /> : null}</View></View>
         <IconButton label="선택한 사진 제거" disabled={sending || editing} onPress={() => setPhoto(null)}><X color={p.muted} size={17} /></IconButton>
       </View> : null}
+      {mentionCandidates.length ? <View accessibilityLabel="태그할 멤버" style={styles.mentionList}>
+        {mentionCandidates.map((person, index) => <Pressable key={person.uid} accessibilityRole="button" accessibilityLabel={`${person.nickname} 태그`} onPressIn={() => chooseMention(person)} style={({ pressed }) => [styles.mentionRow, index > 0 && styles.mentionDivider, pressed && { backgroundColor: p.surface }]}>
+          <Avatar uri={person.photoURL} name={person.nickname} size={30} /><Text numberOfLines={1} style={styles.mentionName}>{person.nickname}</Text>
+        </Pressable>)}
+      </View> : null}
       <View style={styles.composerRow}>
         <IconButton variant="round" style={styles.attachButton} label="사진 첨부" disabled={sending || editing} onPress={() => Alert.alert('사진 첨부', '사진을 선택하거나 새로 촬영해 보세요.', [{ text: '취소', style: 'cancel' }, { text: '앨범에서 선택', onPress: () => void pickPhoto() }, { text: '사진 촬영', onPress: () => void pickPhoto(true) }])}><ImagePlus color={p.muted} size={19} /></IconButton>
-        <TextInput value={content} onChangeText={setContent} multiline maxLength={4000} editable={!sending} placeholder="메시지를 입력하세요" placeholderTextColor={p.muted} onFocus={() => setComposerFocused(true)} onBlur={() => setComposerFocused(false)} style={[styles.messageInput, composerFocused && { borderColor: p.primary }]} accessibilityLabel="메시지" />
+        <TextInput ref={input} value={content} onChangeText={text => { setContent(text); setDismissedMention('') }} onSelectionChange={event => setSelection(event.nativeEvent.selection)} multiline maxLength={4000} editable={!sending} placeholder={chat.kind === 'group' ? '메시지 입력 · @로 멤버 태그' : '메시지를 입력하세요'} placeholderTextColor={p.muted} onFocus={() => setComposerFocused(true)} onBlur={() => setComposerFocused(false)} style={[styles.messageInput, composerFocused && { borderColor: p.primary }]} accessibilityLabel="메시지" />
         <IconButton variant="round" style={styles.sendButton} label="전송" disabled={sending || editing || (!content.trim() && !photo)} onPress={() => void send()}>{sending ? <ActivityIndicator color={p.paper} /> : <SendHorizontal color={p.paper} size={17} />}</IconButton>
       </View>
     </View>
-    <ChatSheet visible={sheet !== null} title={sheet ? titles[sheet] : ''} busy={busy || reactingMessageId !== null} onClose={() => { if (!busy && !reactionLock.current) { setSheet(null); setSelectedPhoto(null) } }}>
+    <ChatSheet visible={sheet !== null && sheet !== 'actions'} title={sheet ? titles[sheet] : ''} busy={busy || reactingMessageId !== null} onClose={() => { if (!busy && !reactionLock.current) { setSheet(null); setSelectedPhoto(null) } }}>
       {sheet === 'menu' ? <>
         <Text numberOfLines={1} style={styles.muted}>{title}</Text>
+        {chat.groupId ? <Text style={styles.tiny}>그룹 멤버는 자동으로 이 채팅방에 참여해요.</Text> : null}
         {chat.kind === 'group' ? <Text style={styles.tiny}>{chat.participantIds.map(id => chat.participants[id]?.nickname || '참여자').join(', ')}</Text> : null}
         <View accessibilityRole="menu" style={styles.menuList}>
+          {chat.groupId ? <MenuItem tool icon={<Compass size={20} color={p.olive} />} title="그룹 홈" description="그룹 정보와 함께 모은 핀을 봐요" onPress={() => { setSheet(null); router.push({ pathname: '/groups/[groupId]', params: { groupId: chat.groupId! } }) }} /> : null}
           <MenuItem tool icon={<Pin size={20} color={p.olive} />} title="고정 메시지" description="중요한 대화를 다시 확인해요" onPress={() => show('pins')} />
           <MenuItem tool icon={<Images size={20} color={p.olive} />} title="미디어 모아보기" description="주고받은 사진을 한눈에 봐요" onPress={() => { setSelectedPhoto(null); show('media') }} />
           <MenuItem last={chat.kind === 'group' || !other} icon={<Flag size={20} color={p.danger} />} title="채팅 신고" description="이 대화의 내용을 신고해요" onPress={() => openReport({ kind: 'chat', targetId: chatId, label: title })} />
@@ -457,11 +502,11 @@ export function ChatRoomScreen() {
       {sheet === 'pins' ? <>
         {!pinned.length ? <View style={styles.collectionEmpty}><Pin size={30} color={p.muted} /><Text style={styles.muted}>아직 고정한 메시지가 없습니다.</Text><Text style={[styles.tiny, { textAlign: 'center', lineHeight: 19 }]}>메시지를 길게 누르거나 옆의 ··· 메뉴에서 고정해 보세요.</Text></View> : <>
           <Text style={styles.hint}>참여자 모두에게 공유된 메시지입니다. 누르면 해당 대화로 이동해요.</Text>
-          {pinned.map(message => <Pressable key={message.id} style={({ pressed }) => [styles.pinnedItem, pressed && { backgroundColor: p.surface }]} onPress={() => jumpToMessage(message.id)} accessibilityRole="button">
+          <View style={styles.pinnedList}>{pinned.map((message, index) => <Pressable key={message.id} style={({ pressed }) => [styles.pinnedItem, index > 0 && styles.pinnedDivider, pressed && { backgroundColor: p.surface }]} onPress={() => jumpToMessage(message.id)} accessibilityRole="button" accessibilityLabel={`${message.authorNickname}의 고정 메시지로 이동`}>
             {message.photoUrl ? <RemoteImage uri={message.photoUrl} style={styles.pinnedThumbnail} /> : null}
-            <View style={{ flex: 1, gap: 7, minWidth: 0 }}><Text style={styles.pinnedAuthor}>{message.authorNickname}</Text><Text numberOfLines={3} style={styles.pinnedContent}>{message.content || message.photoName || '사진 메시지'}</Text><Text style={styles.time}>{formatTimestamp(message.createdAt)}</Text></View>
-            <ArrowUpRight color={p.olive} size={18} />
-          </Pressable>)}
+            <View style={{ flex: 1, gap: 4, minWidth: 0 }}><View style={styles.pinnedMeta}><Text numberOfLines={1} style={[styles.pinnedAuthor, { flexShrink: 1 }]}>{message.authorNickname}</Text><Text style={styles.time}>{formatTimestamp(message.createdAt)}</Text></View><Text numberOfLines={2} style={styles.pinnedContent}>{message.content || message.photoName || '사진 메시지'}</Text></View>
+            <ChevronRight color={p.light} size={17} />
+          </Pressable>)}</View>
         </>}
       </> : null}
       {sheet === 'media' && !selectedPhoto ? <>{!media.length ? <View style={styles.collectionEmpty}><Images size={30} color={p.muted} /><Text style={styles.muted}>아직 주고받은 사진이 없습니다.</Text></View> : null}<View style={styles.mediaGrid}>{media.map(message => <Pressable key={message.id} style={styles.mediaTile} accessibilityLabel={`${message.authorNickname} · ${formatTimestamp(message.createdAt)} 사진 보기`} onPress={() => setSelectedPhoto(message)}><RemoteImage uri={message.photoUrl} style={{ width: '100%', height: '100%' }} /></Pressable>)}</View></> : null}
@@ -470,27 +515,6 @@ export function ChatRoomScreen() {
         <View style={{ gap: 7 }}><Text style={styles.pinnedAuthor}>{selectedPhoto.authorNickname}</Text><Text style={styles.time}>{formatTimestamp(selectedPhoto.createdAt)}</Text>{selectedPhoto.content ? <Text style={[styles.messageText, { marginTop: 8 }]}>{selectedPhoto.content}</Text> : null}</View>
         {sheet === 'media' ? <View style={styles.mediaNav}><IconButton label="이전 사진" size={44} style={{ width: 36 }} disabled={selectedIndex <= 0} onPress={() => setSelectedPhoto(media[selectedIndex - 1])}><ChevronLeft size={20} color={p.ink} /></IconButton><Text style={[styles.muted, { minWidth: 40, textAlign: 'center' }]}>{selectedIndex + 1} / {media.length}</Text><IconButton label="다음 사진" size={44} style={{ width: 36 }} disabled={selectedIndex < 0 || selectedIndex >= media.length - 1} onPress={() => setSelectedPhoto(media[selectedIndex + 1])}><ChevronRight size={20} color={p.ink} /></IconButton></View> : null}
         <Button title="대화로 이동" variant="secondary" icon={<ArrowUpRight size={16} color={p.ink} />} onPress={() => jumpToMessage(selectedPhoto.id)} />{sheet === 'media' ? <Button title="사진 목록" variant="secondary" onPress={() => setSelectedPhoto(null)} /> : null}{selectedPhoto.uid !== uid && selectedPhoto.uid !== 'deleted-user' ? <Button title="사진 신고" variant="secondary" icon={<Flag size={16} color={p.ink} />} onPress={() => reportPhoto(selectedPhoto)} /> : null}
-      </> : null}
-      {sheet === 'actions' && selectedMessage && selectedMessage.uid !== 'deleted-user' ? <>
-        <View style={styles.actionsPreview}><Text style={styles.pinnedAuthor}>{selectedMessage.authorNickname}</Text><Text numberOfLines={3} style={styles.muted}>{selectedMessage.content || selectedMessage.photoName || '사진 메시지'}</Text></View>
-        <View style={{ gap: 8 }}>
-          <Text style={styles.legend}>이모지 반응</Text>
-          <View style={styles.reactionPicker}>{CHAT_REACTION_OPTIONS.map(option => {
-            const selected = selectedMessage.reactionsBy?.[uid] === option.emoji
-            const disabled = busy || reactingMessageId !== null
-            return <Pressable key={option.emoji} accessibilityRole="button" accessibilityLabel={`${option.label} ${selected ? '반응 취소' : '반응하기'}`} accessibilityState={{ selected, disabled }} disabled={disabled} onPress={() => void reactToMessage(selectedMessage, option.emoji, true)} style={({ pressed }) => [styles.reactionOption, selected && styles.reactionSelected, (pressed || disabled) && { opacity: 0.6 }]}><Text style={styles.reactionOptionEmoji}>{option.emoji}</Text></Pressable>
-          })}</View>
-         
-          {reactingMessageId === selectedMessage.id ? <ActivityIndicator size="small" color={p.primary} accessibilityLabel="반응 저장 중" /> : null}
-        </View>
-        <View>
-          <ActionRow tone="pin" icon={chat.pinnedMessageIds?.includes(selectedMessage.id) ? <PinOff size={18} color={p.ink} /> : <Pin size={18} color={p.ink} />} title={busy ? '변경 중…' : chat.pinnedMessageIds?.includes(selectedMessage.id) ? '메시지 고정 해제' : '메시지 고정'} disabled={busy || reactingMessageId !== null} onPress={() => void togglePin()} />
-         
-        </View>
-        {selectedMessage.content ? <ActionRow icon={<Copy size={18} color={p.ink} />} title="메시지 복사" disabled={busy || reactingMessageId !== null} onPress={() => { void Clipboard.setStringAsync(selectedMessage.content).then(() => { setSheet(null) }).catch(e => setSheetError(errorText(e))) }} /> : null}
-        {selectedMessage.uid !== uid ? <ActionRow tone="report" icon={<Flag size={18} color={p.danger} />} title="이 메시지 신고" disabled={busy || reactingMessageId !== null} onPress={() => openReport({ kind: 'chat', targetId: chatId, messageId: selectedMessage.id, label: `${selectedMessage.authorNickname}의 메시지` })} /> : null}
-        {selectedMessage.uid !== uid && selectedMessage.photoUrl ? <ActionRow tone="report" icon={<Flag size={18} color={p.danger} />} title="이 사진 신고" disabled={busy || reactingMessageId !== null} onPress={() => reportPhoto(selectedMessage)} /> : null}
-        {selectedMessage.uid !== uid ? <ActionRow tone="report" icon={<Ban size={18} color={p.danger} />} title={`${selectedMessage.authorNickname}님 차단`} disabled={busy || reactingMessageId !== null} onPress={() => openBlock({ uid: selectedMessage.uid, nickname: selectedMessage.authorNickname, photoURL: chat.participants[selectedMessage.uid]?.photoURL })} /> : null}
       </> : null}
       {sheet === 'readers' ? <>{readers.length ? <View style={{ gap: 4 }}>{readers.map(reader => <View key={reader.uid} style={styles.readerRow}><ReaderAvatar reader={reader} size={32} /><Text style={styles.readerName}>{reader.nickname || '참여자'}</Text>{reader.uid === uid ? <Text style={styles.selfBadge}>나</Text> : null}</View>)}</View> : <Text style={styles.emptyText}>아직 읽은 사람이 없습니다.</Text>}</> : null}
       {sheet === 'report' ? <>
@@ -514,7 +538,46 @@ export function ChatRoomScreen() {
       {sheetError ? <Notice error>{sheetError}</Notice> : null}
     </ChatSheet>
     <PhotoEditor photo={editorOpen ? photo : null} onClose={() => setEditorOpen(false)} onSave={next => { setPhoto(next); setEditorOpen(false) }} />
-  </KeyboardPane></SafeAreaView>
+  </KeyboardPane>
+    <MessageActionOverlay visible={sheet === 'actions' && !!selectedMessage && selectedMessage.uid !== 'deleted-user'} anchorY={actionAnchorY} mine={actionMine}
+      timeLabel={selectedMessage ? `${formatChatDateSeparator(getTimestampDateKey(selectedMessage.createdAt))} ${formatChatTime(selectedMessage.createdAt)}`.trim() : ''}
+      preview={selectedMessage ? <MessagePreview message={selectedMessage} mine={actionMine} viewerUid={uid} /> : null}
+      actions={messageActions} selectedEmoji={selectedMessage?.reactionsBy?.[uid]} reacting={!!selectedMessage && reactingMessageId === selectedMessage.id} disabled={actionDisabled} error={sheet === 'actions' ? sheetError : ''}
+      onReact={emoji => { if (selectedMessage) void reactToMessage(selectedMessage, emoji, true) }}
+      onClose={() => { if (!busy && !reactionLock.current) setSheet(null) }} />
+  </SafeAreaView>
+}
+
+// Tagged members are bold; a tag of the viewer is highlighted, and any tag opens that profile.
+// Web addresses are underlined and open in the browser.
+function MessageText({ content, mentions, mine, viewerUid, numberOfLines }: { content: string; mentions?: Record<string, string>; mine: boolean; viewerUid: string; numberOfLines?: number }) {
+  const router = useRouter()
+  return <Text numberOfLines={numberOfLines} style={[styles.messageText, { color: mine ? p.paper : p.ink }]}>{getChatTextSegments(content, mentions).map((segment, index) => segment.uid
+    ? <Text key={index} accessibilityRole="link" onPress={() => router.push({ pathname: '/people/[userId]', params: { userId: segment.uid! } })}
+      style={[styles.mention, { color: mine ? p.paper : p.primary }, segment.uid === viewerUid && !mine && { backgroundColor: p.primarySoft }]}>{segment.text}</Text>
+    : getLinkSegments(segment.text).map((part, partIndex) => part.url
+      ? <Text key={`${index}-${partIndex}`} accessibilityRole="link" accessibilityHint="브라우저에서 열기" onPress={() => void Linking.openURL(part.url!).catch(() => Alert.alert('링크를 열 수 없어요', part.url))}
+        onLongPress={() => void Clipboard.setStringAsync(part.url!).then(() => Alert.alert('링크를 복사했어요'))}
+        style={[styles.link, styles.messageLink, { color: mine ? p.paper : p.primary }]}>{part.text}</Text>
+      : part.text))}</Text>
+}
+
+// Static copy of the pressed message shown between the reaction bar and the menu.
+function MessagePreview({ message, mine, viewerUid }: { message: ChatMessage; mine: boolean; viewerUid: string }) {
+  const sharedPin = getSharedPinFromMessage(message.content)
+  const sharedGroup = sharedPin ? null : getSharedGroupFromMessage(message.content)
+  const ink = mine ? p.paper : p.ink
+  const accent = mine ? p.paper : p.primary
+  return <View style={{ gap: 5, alignItems: mine ? 'flex-end' : 'flex-start' }}>
+    {message.photoUrl ? <RemoteImage uri={message.photoUrl} style={[styles.messagePhoto, styles.previewPhoto]} contentFit="cover" /> : null}
+    {sharedPin ? <View style={[styles.bubble, mine && styles.mineBubble, { gap: 6 }]}>
+      <View style={styles.inline}><MapPin size={17} color={accent} /><Text style={[styles.link, { color: accent }]}>공유한 핀</Text></View>
+      <Text numberOfLines={2} style={[styles.messageText, { fontWeight: '600', color: ink }]}>{sharedPin.title}</Text>
+    </View> : sharedGroup ? <View style={[styles.bubble, mine && styles.mineBubble, { gap: 6 }]}>
+      <View style={styles.inline}><UsersRound size={17} color={accent} /><Text style={[styles.link, { color: accent }]}>그룹 초대</Text></View>
+      <Text numberOfLines={2} style={[styles.messageText, { fontWeight: '600', color: ink }]}>{sharedGroup.name}</Text>
+    </View> : message.content ? <View style={[styles.bubble, mine && styles.mineBubble]}><MessageText content={message.content} mentions={message.mentions} mine={mine} viewerUid={viewerUid} numberOfLines={8} /></View> : null}
+  </View>
 }
 
 function ChatSheet({ visible, title, onClose, children, busy = false }: { visible: boolean; title: string; onClose: () => void; children: ReactNode; busy?: boolean }) {
@@ -535,11 +598,6 @@ function MenuItem({ icon, title, description, onPress, tool = false, last = fals
     {icon}<View style={{ flex: 1, minWidth: 0, gap: 3 }}><Text style={[styles.menuItemTitle, { color: tool ? p.ink : p.danger }]}>{title}</Text><Text style={styles.menuItemDescription}>{description}</Text></View><ChevronRight size={17} color={p.light} />
   </Pressable>
 }
-function ActionRow({ icon, title, onPress, disabled = false, tone }: { icon: ReactNode; title: string; onPress: () => void; disabled?: boolean; tone?: 'pin' | 'report' }) {
-  return <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={({ pressed }) => [styles.actionRow, tone === 'pin' && styles.pinAction, tone === 'report' && styles.reportAction, (pressed || disabled) && { opacity: disabled ? 0.65 : 0.8 }]}>
-    {icon}<Text style={[styles.actionRowText, tone === 'report' && { color: p.danger }]}>{title}</Text>
-  </Pressable>
-}
 function SelectedPeople({ people, disabled, onRemove }: { people: DaymarkUser[]; disabled: boolean; onRemove: (user: DaymarkUser) => void }) {
   return <View style={styles.selectedList}>{people.map(user => <Pressable key={user.uid} accessibilityRole="button" accessibilityLabel={`${user.nickname}${user.username ? ` (@${user.username})` : ''} 선택 해제`} disabled={disabled} onPress={() => onRemove(user)} style={styles.selectedChip}>
     <Text numberOfLines={1} style={styles.selectedChipText}>{user.nickname}</Text><X size={14} color={p.ink} />
@@ -556,23 +614,21 @@ function errorText(error: unknown) { return error instanceof Error ? error.messa
 
 const styles = StyleSheet.create({
   reactions: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, maxWidth: '100%' },
-  reactionChip: { minWidth: 48, minHeight: 36, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 5, borderWidth: 1, borderColor: p.line, borderRadius: 18, backgroundColor: p.paper },
-  reactionSelected: { borderColor: p.primary, backgroundColor: p.primarySoft },
+  // Reactions sit on a soft fill without an outline; your own reaction is tinted.
+  reactionChip: { minWidth: 48, minHeight: 36, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 18, backgroundColor: p.paper },
+  reactionSelected: { backgroundColor: p.primarySoft },
   reactionEmoji: { fontSize: 17 }, reactionCount: { fontSize: 12, fontWeight: '700', color: p.muted },
-  reactionPicker: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  reactionOption: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: p.line, borderRadius: 22, backgroundColor: p.bg },
-  reactionOptionEmoji: { fontSize: 24 },
   muted: { fontSize: 14, lineHeight: 21, color: p.muted }, tiny: { fontSize: 12, color: p.muted, lineHeight: 17 }, meta: { fontSize: 13, lineHeight: 19, color: p.muted, marginTop: 2 }, time: { fontSize: 12, lineHeight: 17, color: p.light },
   emptyText: { color: p.muted, fontSize: 14, lineHeight: 25, textAlign: 'center', paddingVertical: 18 }, legend: { color: p.ink, fontSize: 14, fontWeight: '600' }, hint: { color: p.muted, fontSize: 12.5, lineHeight: 21 },
   errorBlock: { gap: 10 }, dialogActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   inline: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  chatRow: { minHeight: 92, paddingVertical: 24, flexDirection: 'row', alignItems: 'center', gap: 14 },
-  chatRowSeparator: { borderTopWidth: 1, borderTopColor: p.line },
+  // Compact rows, no rules between them: spacing alone separates conversations.
+  chatRow: { minHeight: 68, paddingVertical: 8, paddingHorizontal: 4, flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 12 },
   listPage: { paddingTop: 0, gap: 0 },
   // Keep the last conversation clear of the floating button.
-  chatList: { marginBottom: 72, paddingTop: 8, borderTopWidth: 1, borderTopColor: p.line },
+  chatList: { marginBottom: 72, paddingTop: 4, gap: 2 },
   chatRowPressed: { backgroundColor: p.surface },
-  chatRowContent: { flex: 1, minWidth: 0, gap: 5 }, chatTitle: { fontSize: 16, lineHeight: 22, fontWeight: '600', color: p.ink },
+  chatRowContent: { flex: 1, minWidth: 0, gap: 2 }, chatTitle: { fontSize: 15.5, lineHeight: 21, fontWeight: '600', color: p.ink },
   groupAvatar: { backgroundColor: p.oliveSoft, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }, unread: { width: 9, height: 9, flexShrink: 0, backgroundColor: p.primary, borderRadius: 9 },
   selectedList: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   selectedChip: { flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: '100%', minHeight: 36, paddingVertical: 6, paddingHorizontal: 10, borderWidth: 1, borderColor: p.line, borderRadius: 20, backgroundColor: p.primarySoft },
@@ -596,6 +652,7 @@ const styles = StyleSheet.create({
   mineBubble: { backgroundColor: p.primary, borderTopLeftRadius: 14, borderTopRightRadius: 4 },
   highlighted: { outlineWidth: 3, outlineStyle: 'solid', outlineColor: p.primary, outlineOffset: 5 },
   messageText: { fontSize: 16, lineHeight: 25, color: p.ink },
+  previewPhoto: { width: 200, height: 200 },
   messagePhoto: { width: 240, height: 240, maxWidth: '100%', borderRadius: 20, borderWidth: 1, borderColor: p.line, backgroundColor: p.surface },
   messageMeta: { flexDirection: 'row', alignItems: 'center', gap: 6 }, readStatus: { color: p.primaryHover, fontSize: 12, fontWeight: '700' },
   receipts: { flexDirection: 'row', alignItems: 'center', gap: 3, minWidth: 24, minHeight: 24, padding: 3, borderRadius: 12 },
@@ -607,6 +664,12 @@ const styles = StyleSheet.create({
   pinnedText: { color: p.muted, fontSize: 11 },
   composer: { gap: 8, paddingHorizontal: 12, paddingTop: 12, backgroundColor: p.paper, borderTopWidth: 1, borderTopColor: p.line, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
   composerRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
+  mentionList: { maxHeight: 220, borderBottomWidth: 1, borderBottomColor: p.line, overflow: 'hidden' },
+  mentionRow: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 48, paddingVertical: 8, paddingHorizontal: 6 },
+  mentionDivider: { borderTopWidth: 1, borderTopColor: p.line },
+  mentionName: { flex: 1, minWidth: 0, color: p.ink, fontSize: 14.4, fontWeight: '600' },
+  mention: { fontWeight: '700' },
+  messageLink: { fontSize: 16, lineHeight: 25, fontWeight: '400', textDecorationLine: 'underline' },
   attachButton: { borderRadius: 6, borderWidth: 1, borderColor: p.line },
   sendButton: { borderRadius: 6, backgroundColor: p.primary },
   messageInput: { flex: 1, fontSize: 15, lineHeight: 21, color: p.ink, minHeight: 44, maxHeight: 120, backgroundColor: p.paper, borderWidth: 1, borderColor: p.line, borderRadius: 22, paddingVertical: 11, paddingHorizontal: 16 },
@@ -616,11 +679,11 @@ const styles = StyleSheet.create({
   menuItem: { flexDirection: 'row', alignItems: 'center', gap: 14, minHeight: 60, paddingVertical: 12, paddingHorizontal: 4, borderBottomWidth: 1, borderColor: p.line },
   menuItemTitle: { fontSize: 14.4, fontWeight: '600' }, menuItemDescription: { color: p.muted, fontSize: 12.2, lineHeight: 18 },
   actionsPreview: { gap: 6, padding: 14, borderWidth: 1, borderColor: p.line, borderRadius: 10, backgroundColor: p.bg },
-  actionRow: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 48, paddingVertical: 12, paddingHorizontal: 4, borderBottomWidth: 1, borderColor: p.line },
-  pinAction: {}, reportAction: {},
-  actionRowText: { color: p.ink, fontSize: 14, fontWeight: '700' }, pinHint: { color: p.muted, fontSize: 12, lineHeight: 18, marginTop: 8 },
-  pinnedItem: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 16, borderWidth: 1, borderColor: p.line, borderRadius: 20, backgroundColor: p.paper },
-  pinnedThumbnail: { width: 56, height: 64, borderRadius: 12 }, pinnedAuthor: { color: p.ink, fontSize: 13.3, fontWeight: '600' }, pinnedContent: { color: p.ink, fontSize: 14.4, lineHeight: 23 },
+  pinnedList: { borderTopWidth: 1, borderBottomWidth: 1, borderColor: p.line },
+  pinnedItem: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 64, paddingVertical: 12, paddingHorizontal: 4 },
+  pinnedDivider: { borderTopWidth: 1, borderTopColor: p.line },
+  pinnedMeta: { flexDirection: 'row', alignItems: 'baseline', gap: 8, minWidth: 0 },
+  pinnedThumbnail: { width: 44, height: 44, borderRadius: 8 }, pinnedAuthor: { color: p.ink, fontSize: 13.3, fontWeight: '600' }, pinnedContent: { color: p.ink, fontSize: 14.4, lineHeight: 23 },
   mediaGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 5 }, mediaTile: { width: '32.4%', aspectRatio: 1, borderRadius: 16, overflow: 'hidden', backgroundColor: p.surface },
   viewer: { width: '100%', height: 360, padding: 12, backgroundColor: p.ink, borderRadius: 6, overflow: 'hidden' },
   mediaNav: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3 },

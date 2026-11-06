@@ -34,3 +34,15 @@ test('links without www open the pin', () => {
 test('pins shared before the rename still open', () => {
   assert.deepEqual(getSharedPinFromMessage('[스팟잇 핀]\n주말 산책\n서울숲\nhttps://spotitmap.kr/posts/old-pin'), { postId: 'old-pin', title: '주말 산책', placeName: '서울숲' })
 })
+
+test('shared groups open the group and carry a private group invite code', async () => {
+  const { createGroupShareMessage, getSharedGroupFromMessage } = await import('../src/lib/chatPinShare.ts')
+  const open = createGroupShareMessage({ id: 'g-1', name: '책방 모임', visibility: 'public' })
+  assert.deepEqual(getSharedGroupFromMessage(open), { groupId: 'g-1', name: '책방 모임', detail: '공개 그룹', inviteCode: '' })
+  const closed = createGroupShareMessage({ id: 'g-2', name: '이름\n줄바꿈', visibility: 'private' }, 'ABCD-EFGH-2345')
+  assert.equal(closed.split('\n').length, 4)
+  assert.equal(getSharedGroupFromMessage(closed).inviteCode, 'ABCDEFGH2345')
+  assert.throws(() => createGroupShareMessage({ id: 'g-3', name: 'x', visibility: 'private' }))
+  assert.equal(getSharedGroupFromMessage('[피노리 그룹]\n이름\n공개 그룹\nhttps://evil.example/groups/g-1'), null)
+  assert.equal(getSharedGroupFromMessage('[피노리 그룹]\n이름\n공개 그룹\nhttps://www.pinori.kr/posts/g-1'), null)
+})

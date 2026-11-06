@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { getExternalMapUrl, isValidLocation } from '../src/lib/mapLocation.ts'
 import { clusterPosts } from '../src/lib/mapClusters.ts'
-import { getDirectionsUrl, startMapDirections } from '../src/lib/mapDirections.ts'
+import { getAppleDirectionsUrl, getDirectionsUrl, startMapDirections } from '../src/lib/mapDirections.ts'
 import { withLocationTimeout } from '../src/lib/locationTimeout.ts'
 import { projectMapPoint } from '../src/lib/mapProjection.ts'
 
@@ -119,4 +119,28 @@ test('GPS wait is bounded and preserves successful results and errors', async ()
   const point = { lat: 37.5, lng: 127 }
   assert.equal(await withLocationTimeout(Promise.resolve(point), 100), point)
   await assert.rejects(withLocationTimeout(Promise.reject(new Error('GPS off')), 100), /GPS off/)
+})
+
+test('Apple Maps links carry the pin, its label and the selected travel mode', async () => {
+  const destination = { lat: 37.54, lng: 127.03 }
+  const place = new URL(getExternalMapUrl(destination, 'apple', '성북천'))
+  assert.equal(place.origin, 'https://maps.apple.com')
+  assert.equal(place.searchParams.get('ll'), '37.54,127.03')
+  assert.equal(place.searchParams.get('q'), '성북천')
+  assert.equal(new URL(getExternalMapUrl(destination)).origin, 'https://www.google.com')
+  for (const [mode, flag] of [['transit', 'r'], ['walking', 'w'], ['driving', 'd']]) {
+    const url = new URL(getAppleDirectionsUrl(destination, mode))
+    assert.equal(url.searchParams.get('daddr'), '37.54,127.03')
+    assert.equal(url.searchParams.get('dirflg'), flag)
+    assert.equal(url.searchParams.has('saddr'), false)
+  }
+  assert.throws(() => getAppleDirectionsUrl({ lat: 91, lng: 0 }))
+  // Apple Maps resolves the current location itself, so no GPS request is made.
+  let opened = ''
+  assert.equal(await startMapDirections(destination, 'walking', {
+    getCurrentLocation: async () => assert.fail('Apple Maps must not request GPS'),
+    openUrl: async url => { opened = url },
+    isCancelled: () => false,
+  }, 'apple'), true)
+  assert.equal(new URL(opened).hostname, 'maps.apple.com')
 })

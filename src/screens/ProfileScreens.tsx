@@ -3,7 +3,7 @@ import { ActivityIndicator, Alert, Linking, Modal, Pressable, StyleSheet, View, 
 import { Text } from '../components/Typography';
 import { RemoteImage } from '../components/RemoteImage';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router'
-import { ArrowLeft, Ban, BookOpen, Camera, Check, ChevronLeft, ChevronRight, Clock, Crop, Ellipsis, Flag, Grid3X3, Heart, Lock, LogOut, MapPin, MessageCircle, RefreshCw, Save, Settings, Trash2, UserMinus, UserPlus, UserRoundCheck, X } from 'lucide-react-native'
+import { ArrowLeft, Ban, BookOpen, Camera, Check, ChevronLeft, ChevronRight, Clock, Crop, Ellipsis, Flag, Grid3X3, Heart, Lock, LogOut, MapPin, MessageCircle, RefreshCw, Save, Settings, UserMinus, UserX, UserPlus, UserRoundCheck, X } from 'lucide-react-native'
 import { updateProfile } from 'firebase/auth'
 import { Avatar, Button, Empty, Field, IconButton, Notice, QuietSurface, Screen, elevation, p, s } from '../components/ui'
 import { Dialog } from '../components/Dialog'
@@ -21,7 +21,8 @@ import { useLikedPosts, useProfileAlbum, type LikedPostsState, type ProfileAlbum
 import { policyNavigation } from '../lib/policyNavigation'
 import { OPERATOR_PHONE, OPERATOR_PHONE_URL } from '../lib/operatorContact'
 import { BIO_MAX_LENGTH, NICKNAME_MAX_LENGTH, USERNAME_MAX_LENGTH, getUsernameError } from '../lib/userProfile'
-import { authErrorMessage, deleteAccount, logout, reauthenticateAccount } from '../services/authService'
+import { authErrorMessage, logout } from '../services/authService'
+import { DeleteAccountDialog } from '../components/DeleteAccountDialog'
 import { getOrCreateDirectChat } from '../services/chatService'
 import {
   acceptFollowRequest, cancelFollowRequest, declineFollowRequest, followUser,
@@ -347,8 +348,6 @@ export function ProfileSettingsScreen() {
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [deleteOpen, setDeleteOpen] = useState(false)
-  const [deletePassword, setDeletePassword] = useState('')
-  const [deleteError, setDeleteError] = useState('')
   const initializedUid = useRef(profile?.uid)
   const actionLock = useRef(false)
   const requestLock = useRef(false)
@@ -411,17 +410,6 @@ export function ProfileSettingsScreen() {
     actionLock.current = true; setBusy('logout'); setError('')
     try { await logout(); router.replace('/login') }
     catch (err) { setError(authErrorMessage(err)) }
-    finally { actionLock.current = false; setBusy('') }
-  }
-
-  async function removeAccount() {
-    if (!currentUser || actionLock.current) return
-    actionLock.current = true; setBusy('delete'); setDeleteError('')
-    try {
-      await reauthenticateAccount(currentUser, deletePassword)
-      await deleteAccount(currentUser)
-      setDeletePassword(''); setDeleteOpen(false); router.replace('/login')
-    } catch (err) { setDeleteError(authErrorMessage(err, '계정 탈퇴에 실패했습니다.')) }
     finally { actionLock.current = false; setBusy('') }
   }
 
@@ -491,21 +479,17 @@ export function ProfileSettingsScreen() {
         <Text style={v.policyText}>{item.title}</Text><ChevronRight size={17} color={p.muted} />
       </Pressable>)}
     </View>
-    <View style={[v.settingsSection, { gap: 12 }]}><Text accessibilityRole="header" style={v.settingsHeading}>계정 관리</Text>
+    <View style={v.settingsSection}><Text accessibilityRole="header" style={[v.settingsHeading, { marginBottom: 10 }]}>계정 관리</Text>
       <Pressable accessibilityRole="button" disabled={!!busy} onPress={() => Alert.alert('로그아웃', '피노리에서 로그아웃할까요?', [{ text: '취소', style: 'cancel' }, { text: '로그아웃', onPress: () => { void signOut() } }])} style={({ pressed }) => [v.logout, pressed && { opacity: 0.6 }]}>
         {busy === 'logout' ? <ActivityIndicator size="small" color={p.muted} /> : <LogOut size={18} color={p.muted} />}<Text style={[v.policyText, { flex: 1 }]}>로그아웃</Text><ChevronRight size={17} color={p.muted} />
       </Pressable>
-      <Pressable accessibilityRole="button" style={v.deleteLink} disabled={!!busy} onPress={() => { setDeleteError(''); setDeletePassword(''); setDeleteOpen(true) }}><Text style={v.deleteText}>계정 탈퇴</Text></Pressable>
+      <Pressable accessibilityRole="button" disabled={!!busy} onPress={() => setDeleteOpen(true)} style={({ pressed }) => [v.logout, v.policyDivider, pressed && { opacity: 0.6 }]}>
+        <UserX size={18} color={p.danger} /><Text style={[v.policyText, { flex: 1, color: p.danger }]}>회원 탈퇴</Text><ChevronRight size={17} color={p.muted} />
+      </Pressable>
     </View>
     {list && <FollowList user={profile} kind={list} manage onClose={() => setList(null)} onChanged={() => { void refreshProfile().catch(err => setError(authErrorMessage(err))) }} />}
     <PhotoEditor photo={editingPhoto} square onClose={() => setEditingPhoto(null)} onSave={value => { setPhoto(value); setRemovePhoto(false); setEditingPhoto(null); setMessage(''); setError('') }} />
-    <Dialog visible={deleteOpen} title="계정을 탈퇴할까요?" busy={busy === 'delete'} onClose={() => setDeleteOpen(false)}>
-      <View style={{ gap: 8 }}><Text style={v.deleteCopy}>탈퇴하면 프로필, 팔로우 관계, 내가 작성한 기록, 댓글, 좋아요가 삭제됩니다.</Text><Text style={v.deleteCopy}>채팅방에 남아 있던 내 메시지는 탈퇴한 사용자 메시지로 익명 처리됩니다.</Text></View>
-      <Notice>삭제된 기록은 복구할 수 없습니다. 계정 보호를 위해 본인 인증을 한 번 더 진행합니다.</Notice>
-      {currentUser.providerData.some(provider => provider.providerId === 'password') && <Field label="현재 비밀번호" value={deletePassword} onChangeText={setDeletePassword} secureTextEntry autoComplete="current-password" editable={!busy} />}
-      {!!deleteError && <Notice error>{deleteError}</Notice>}
-      <View style={[s.row, { flexWrap: 'wrap', gap: 8 }]}><Button title="취소" variant="secondary" style={{ flex: 1 }} disabled={!!busy} onPress={() => setDeleteOpen(false)} /><Button title={busy === 'delete' ? '탈퇴 처리 중' : '탈퇴하기'} variant="danger" style={{ flex: 1 }} icon={<Trash2 size={17} color={p.paper} />} loading={busy === 'delete'} disabled={!!busy} onPress={removeAccount} /></View>
-    </Dialog>
+    <DeleteAccountDialog visible={deleteOpen} onClose={() => setDeleteOpen(false)} />
   </Screen>
 }
 
@@ -558,6 +542,4 @@ const v = StyleSheet.create({
   settingsSection: { marginTop: 12, paddingTop: 24, borderTopWidth: 1, borderColor: p.line }, settingsHeading: { color: p.muted, fontSize: 13.6, fontWeight: '700' },
   policyLink: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, minHeight: 48, paddingVertical: 8 }, policyDivider: { borderTopWidth: 1, borderColor: p.line }, policyText: { color: p.ink, fontSize: 14.7 },
   logout: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 48, paddingVertical: 8 },
-  deleteLink: { alignSelf: 'flex-end', minHeight: 44, padding: 8, justifyContent: 'center' }, deleteText: { color: p.muted, fontSize: 13, textDecorationLine: 'underline' },
-  deleteCopy: { color: p.muted, fontSize: 15, lineHeight: 24 },
 })

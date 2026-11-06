@@ -11,10 +11,12 @@ import * as authSdk from 'firebase/auth'
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 async function harness({ platform = 'ios', providerError, reauthError, response = {}, name = 'Apple User', existingName = '', available = true, ownership = 'standalone', env = {} } = {}) {
   const calls = []
-  const user = { uid: 'apple-user', displayName: existingName, providerData: [{ providerId: 'apple.com' }] }
-  const auth = { currentUser: user }
+  const user = { uid: 'apple-user', displayName: existingName, providerData: [{ providerId: 'apple.com' }],
+    getIdToken: async () => 'firebase-id-token', getIdTokenResult: async () => ({ authTime: new Date().toUTCString() }) }
+  const auth = { currentUser: user, app: { options: { apiKey: 'test-key' } } }
   let androidOptions
-  const context = createContext({ URL, process: { env: { EXPO_PUBLIC_APPLE_SERVICE_ID: 'kr.spotitmap.signin', EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN: 'test.firebaseapp.com', ...env } }, __DEV__: false })
+  const context = createContext({ URL, process: { env: { EXPO_PUBLIC_APPLE_SERVICE_ID: 'kr.spotitmap.signin', EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN: 'test.firebaseapp.com', ...env } }, __DEV__: false,
+    fetch: async (url, init) => { calls.push({ kind: 'revoke-code', url, body: JSON.parse(init.body) }); return { ok: true } } })
   const stubs = {
     'expo-constants': { default: { appOwnership: ownership } },
     'expo-crypto': { randomUUID, CryptoDigestAlgorithm: { SHA256: 'SHA-256' }, digestStringAsync: async (_, value) => createHash('sha256').update(value).digest('hex') },
@@ -25,6 +27,8 @@ async function harness({ platform = 'ios', providerError, reauthError, response 
       signInWithPopup: async (target, provider) => { assert.equal(target, auth); calls.push({ kind: 'popup', provider }); return { user } },
       reauthenticateWithCredential: async (target, credential) => { assert.equal(target, user); calls.push({ kind: 'reauth', credential }); if (reauthError) throw reauthError; return { user } },
       reauthenticateWithPopup: async (target, provider) => { assert.equal(target, user); calls.push({ kind: 'reauth-popup', provider }); return { user } },
+      deleteUser: async target => { assert.equal(target, user); calls.push({ kind: 'delete-user' }) },
+      revokeAccessToken: async (target, token) => { assert.equal(target, auth); calls.push({ kind: 'revoke-access', token }) },
       updateProfile: async (target, data) => { assert.equal(target, user); calls.push({ kind: 'name', ...data }); Object.assign(user, data) },
     },
     'expo-apple-authentication': {
@@ -34,7 +38,7 @@ async function harness({ platform = 'ios', providerError, reauthError, response 
       signInAsync: async options => {
         calls.push({ kind: 'ios', options })
         if (providerError) throw providerError
-        return { identityToken: 'apple-id-token', state: options.state, fullName: name ? { givenName: name } : null, ...response }
+        return { identityToken: 'apple-id-token', authorizationCode: 'apple-code', state: options.state, fullName: name ? { givenName: name } : null, ...response }
       },
     },
     '@invertase/react-native-apple-authentication': { appleAuthAndroid: {
@@ -42,11 +46,11 @@ async function harness({ platform = 'ios', providerError, reauthError, response 
       configure: options => { androidOptions = options; calls.push({ kind: 'android', options }) },
       signIn: async () => {
         if (providerError) throw providerError
-        return { id_token: 'apple-id-token', state: androidOptions.state, user: { name: { firstName: name } }, ...response }
+        return { id_token: 'apple-id-token', code: 'apple-code', state: androidOptions.state, user: { name: { firstName: name } }, ...response }
       },
     } },
     [resolve(root, 'src/lib/firebase.ts')]: { requireAuth: () => auth },
-    [resolve(root, 'src/services/userService.ts')]: { upsertUserProfile: async target => { calls.push({ kind: 'profile', uid: target.uid }) }, deleteUserAccountData: async () => assert.fail('Login must not delete data') },
+    [resolve(root, 'src/services/userService.ts')]: { upsertUserProfile: async target => { calls.push({ kind: 'profile', uid: target.uid }) }, deleteUserAccountData: async () => { calls.push({ kind: 'delete-data' }) }, deleteIncompleteAccountData: async () => { calls.push({ kind: 'delete-incomplete' }) } },
     [resolve(root, 'src/services/pushNotificationService.ts')]: { disablePushNotifications: async () => {} },
   }
   const modules = new Map()
@@ -171,4 +175,36 @@ test('wrong Apple account fails reauthentication without replacing the Firebase 
 test('Apple credential errors use the social provider message', async () => {
   const { service } = await harness()
   assert.match(service.authErrorMessage({ code: 'auth/invalid-credential' }, '', 'apple'), /애플 인증/)
+})
+
+for (const platform of ['ios', 'android']) {
+  test(`${platform} Apple account deletion confirms with Apple, revokes the code, then deletes`, async () => {
+    const { service, calls, user } = await harness({ platform })
+    await service.deleteMyAccount(user)
+    const kinds = calls.map(c => c.kind).filter(kind => kind !== platform)
+    assert.deepEqual(kinds, ['reauth', 'delete-data', 'revoke-code', 'delete-user'])
+    const revoke = calls.find(c => c.kind === 'revoke-code')
+    assert.equal(new URL(revoke.url).pathname, '/v2/accounts:revokeToken')
+    assert.deepEqual(revoke.body, { providerId: 'apple.com', tokenType: 'CODE', token: 'apple-code', idToken: 'firebase-id-token' })
+  })
+}
+
+test('an unfinished Apple signup is removed without the member data cleanup', async () => {
+  const { service, calls, user } = await harness()
+  await service.deleteMyAccount(user, { incomplete: true })
+  assert.equal(calls.some(c => c.kind === 'delete-data'), false)
+  assert.deepEqual(calls.map(c => c.kind).slice(-2), ['revoke-code', 'delete-user'])
+  assert.ok(calls.some(c => c.kind === 'delete-incomplete'))
+})
+
+test('Apple sign-in never deletes data', async () => {
+  const { service, calls } = await harness()
+  await service.loginWithApple()
+  assert.equal(calls.some(c => c.kind.startsWith('delete')), false)
+})
+
+test('a failed Apple confirmation deletes nothing', async () => {
+  const { service, calls, user } = await harness({ reauthError: { code: 'auth/user-mismatch' } })
+  await assert.rejects(service.deleteMyAccount(user))
+  assert.equal(calls.some(c => c.kind.startsWith('delete') || c.kind.startsWith('revoke')), false)
 })

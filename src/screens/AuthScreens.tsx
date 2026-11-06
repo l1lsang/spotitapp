@@ -18,7 +18,8 @@ import { useAuth } from '../hooks/useAuth'
 import { requireAuth } from '../lib/firebase'
 import { getBirthDateError, getSignupRequirementsError, type SignupRequirements } from '../lib/signupRequirements'
 import { BIO_MAX_LENGTH, NICKNAME_MAX_LENGTH, USERNAME_MAX_LENGTH, getUsernameError, normalizeUsername } from '../lib/userProfile'
-import { authErrorMessage, loginWithApple, loginWithEmail, loginWithGoogle, loginWithKakao, sendPasswordReset, signupWithEmail, type LoginProvider } from '../services/authService'
+import { authErrorMessage, loginWithApple, loginWithEmail, loginWithGoogle, loginWithKakao, logout, sendPasswordReset, signupWithEmail, type LoginProvider } from '../services/authService'
+import { DeleteAccountDialog } from '../components/DeleteAccountDialog'
 import { uploadProfilePhoto, type UploadPhoto } from '../services/storageService'
 import { isUsernameAvailable, updateUserProfileDetails, upsertUserProfile, UsernameTakenError } from '../services/userService'
 
@@ -157,6 +158,7 @@ export function SignupScreen() {
   const [editingPhoto, setEditingPhoto] = useState<UploadPhoto | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [cancelOpen, setCancelOpen] = useState(false)
   const lock = useRef(false)
 
   const initialNickname = profile?.onboardingComplete === false && currentUser?.displayName ? currentUser.displayName : profile?.nickname
@@ -199,6 +201,15 @@ export function SignupScreen() {
       setError(authErrorMessage(err, '가입 정보를 저장하지 못했습니다.'))
       if (err instanceof UsernameTakenError || !requireAuth().currentUser) setStep('account')
     } finally { lock.current = false; setBusy(false) }
+  }
+
+  // A social sign-in that has not finished signup can switch accounts or leave entirely.
+  async function switchAccount() {
+    if (lock.current) return
+    lock.current = true; setBusy(true); setError('')
+    try { await logout(); router.replace('/login') }
+    catch (err) { setError(authErrorMessage(err)) }
+    finally { lock.current = false; setBusy(false) }
   }
 
   async function choosePhoto() {
@@ -268,7 +279,13 @@ export function SignupScreen() {
       <TextAction label="이전 단계" icon={<ArrowLeft size={16} color={p.muted} />} disabled={busy} onPress={() => { setError(''); setStep('account') }} />
     </View>}
     {!currentUser && <Pressable style={a.textButton} accessibilityRole="link" onPress={() => router.replace('/login')}><Text style={a.switchText}>이미 계정이 있다면 <Text style={a.switchLink}>로그인</Text></Text></Pressable>}
+    {currentUser && profile?.onboardingComplete === false && <View style={a.exitActions}>
+      <TextAction label="다른 계정으로 로그인" disabled={busy} onPress={() => void switchAccount()} />
+      <Text style={a.hint}>·</Text>
+      <TextAction label="가입 취소" disabled={busy} onPress={() => setCancelOpen(true)} />
+    </View>}
     <PolicyLinks credit />
+    <DeleteAccountDialog visible={cancelOpen} incomplete onClose={() => setCancelOpen(false)} />
     <PhotoEditor photo={editingPhoto} square onClose={() => setEditingPhoto(null)} onSave={value => { setPhoto(value); setEditingPhoto(null) }} />
   </AuthFrame>
 }
@@ -289,6 +306,7 @@ const a = StyleSheet.create({
   divider: { flexDirection: 'row', alignItems: 'center', gap: 12, marginVertical: 8 }, rule: { flex: 1, height: 1, backgroundColor: p.line }, dividerText: { color: p.muted, fontSize: 13.6, fontWeight: '600' },
   social: { minHeight: 48, borderRadius: 6, flexDirection: 'row', gap: 12, alignItems: 'center', justifyContent: 'center' }, google: { backgroundColor: p.paper, borderWidth: 1, borderColor: p.line }, kakao: { backgroundColor: '#FEE500' }, socialText: { color: '#191600', fontSize: 14, fontWeight: '600' },
   googleNotice: { gap: 5, marginTop: -2 },
+  exitActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12 },
   progress: { flexDirection: 'row', alignItems: 'center', gap: 24, marginBottom: 16 }, progressStep: { flexDirection: 'row', alignItems: 'center', gap: 8 }, stepCircle: { width: 25, height: 25, borderRadius: 13, borderWidth: 1, borderColor: p.line, alignItems: 'center', justifyContent: 'center' }, stepActive: { borderColor: p.primary, backgroundColor: p.primary }, stepNumber: { color: p.paper, fontSize: 12, fontWeight: '600' }, stepLabel: { color: p.muted, fontSize: 13, fontWeight: '600' }, stepLabelActive: { color: p.primaryHover },
   consents: { padding: 16, borderRadius: 6, backgroundColor: p.paper, gap: 14 }, consentLegend: { color: p.ink, fontSize: 15, fontWeight: '700' },
   consentRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 }, consentLabel: { flex: 1, flexDirection: 'row', alignItems: 'flex-start', gap: 9, minHeight: 44 }, consentText: { flex: 1, fontSize: 14, color: p.ink, lineHeight: 21 }, consentHint: { color: p.muted, fontSize: 14, lineHeight: 22 }, consentLink: { color: p.ink, fontSize: 14, lineHeight: 21, textDecorationLine: 'underline' },

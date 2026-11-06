@@ -1,4 +1,8 @@
 import type { ConfigContext, ExpoConfig } from "expo/config";
+
+// Web paths that also exist as app routes; keep in sync with the web's well-known files.
+const LINK_HOST = "www.pinori.kr";
+const LINK_PATHS = ["posts", "feed", "groups", "people", "chats"];
 export default ({ config }: ConfigContext): ExpoConfig => {
   const googleIosId = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID;
   const kakaoKey = process.env.EXPO_PUBLIC_KAKAO_NATIVE_APP_KEY;
@@ -9,7 +13,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     ...config,
     name: "피노리",
     slug: "spotit",
-    version: "1.0.8",
+    version: "1.0.10",
     orientation: "portrait",
     scheme: "spotit",
     userInterfaceStyle: "light",
@@ -20,6 +24,9 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       usesAppleSignIn: true,
       icon: "./assets/spotit/app-icon-1024.png",
       infoPlist: { ITSAppUsesNonExemptEncryption: false },
+      // Shared https://www.pinori.kr links open the app when installed (Universal Links).
+      // The web serves /.well-known/apple-app-site-association; pinori.kr redirects to www.
+      associatedDomains: [`applinks:${LINK_HOST}`],
       ...(process.env.GOOGLE_SERVICES_INFO_PLIST
         ? { googleServicesFile: process.env.GOOGLE_SERVICES_INFO_PLIST }
         : {}),
@@ -32,6 +39,15 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         backgroundColor: "#FFFFFF",
       },
       softwareKeyboardLayoutMode: "resize",
+      // Android App Links for the same shared paths; verified by /.well-known/assetlinks.json.
+      intentFilters: [
+        {
+          action: "VIEW",
+          autoVerify: true,
+          data: LINK_PATHS.map((path) => ({ scheme: "https", host: LINK_HOST, pathPrefix: `/${path}/` })),
+          category: ["BROWSABLE", "DEFAULT"],
+        },
+      ],
       // Without it Android removes the GPS location from photos the app picks.
       permissions: [
         ...(config.android?.permissions || []),

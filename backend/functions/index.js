@@ -12,6 +12,8 @@ Object.assign(exports, require('./counters'))
 Object.assign(exports, require('./postCleanup'))
 Object.assign(exports, require('./userProfile'))
 Object.assign(exports, require('./postSearch'))
+Object.assign(exports, require('./groups'))
+Object.assign(exports, require('./chatNotifications'))
 
 const db = admin.firestore()
 const messaging = admin.messaging()

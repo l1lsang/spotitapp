@@ -10,7 +10,35 @@ export interface PinGroup {
   memberCount: number
   createdAt: Timestamp
   visibility: GroupVisibility
+  /** Co-admins appointed by the owner; they can edit the group and remove ordinary members. */
+  adminUids?: string[]
 }
+
+export type GroupRole = 'owner' | 'admin' | 'member'
+
+export interface GroupMember {
+  uid: string
+  nickname: string
+  photoURL: string
+  role: GroupRole
+  joinedAt: number
+}
+
+/** Someone removed from the group who may not join again until unbanned. */
+export interface GroupBan {
+  uid: string
+  nickname: string
+  photoURL: string
+  bannedAt: number
+}
+
+export function getGroupRole(group: Pick<PinGroup, 'ownerUid' | 'adminUids'>, uid: string | undefined): GroupRole {
+  if (!uid) return 'member'
+  if (group.ownerUid === uid) return 'owner'
+  return group.adminUids?.includes(uid) ? 'admin' : 'member'
+}
+
+export const GROUP_ROLE_LABELS: Record<GroupRole, string> = { owner: '그룹장', admin: '관리자', member: '멤버' }
 
 export interface GroupInput {
   name: string

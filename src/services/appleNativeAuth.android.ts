@@ -26,5 +26,6 @@ export async function nativeAppleSignIn(rawNonce: string, state: string): Promis
     idToken: result.id_token || null,
     state: result.state,
     displayName: [result.user?.name?.firstName, result.user?.name?.lastName].filter(Boolean).join(' ').trim() || undefined,
+    authorizationCode: result.code || undefined,
   }
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Linking, Platform, Pressable, ScrollView, Share, StyleSheet, View } from 'react-native';
+import { Platform, Pressable, ScrollView, Share, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
 import { Heart, MapPin, MessageCircle } from 'lucide-react-native';
 import { Text } from './Typography';
@@ -8,7 +8,7 @@ import { PostActionsMenu } from './PostActionsMenu';
 import { p } from './ui';
 import { useAuth } from '../hooks/useAuth';
 import { formatFeedDate, getFeedTone } from '../lib/feedPosts';
-import { getExternalMapUrl } from '../lib/mapLocation';
+import { openLocationInMaps } from '../lib/mapAppChoice';
 import { subscribeToLikeStatus, subscribeToPostReactions, togglePostLike } from '../services/likeService';
 import { getUserProfile } from '../services/userService';
 import type { Post } from '../types/post';
@@ -103,7 +103,7 @@ export function FeedPostCard({ post }: { post: Post }) {
         <Heart size={24} color={liked ? p.coral : p.ink} fill={liked ? p.coral : 'none'} />
       </IconAction>
       <IconAction label="댓글 보기" onPress={openDetail}><MessageCircle size={24} color={p.ink} /></IconAction>
-      <IconAction label="지도에서 위치 열기" onPress={() => void Linking.openURL(getExternalMapUrl(post)).catch(() => setError('지도를 열지 못했어요.'))}><MapPin size={24} color={p.ink} /></IconAction>
+      <IconAction label="지도에서 위치 열기" onPress={() => openLocationInMaps(post, post.placeName, setError)}><MapPin size={24} color={p.ink} /></IconAction>
       {photos.length > 1 && <View style={c.dots}>{photos.map((url, index) => <View key={url} style={[c.dot, index === photoIndex && { backgroundColor: p.primary }]} />)}</View>}
     </View>
 

@@ -65,3 +65,18 @@ test('others’ pins use a colour that none of my current or legacy pin colours 
     assert.equal(getPinThemeError({ id: 'custom', name: '보라', color }), FOLLOWING_PIN_COLOR_ERROR)
   }
 })
+
+test('the easy palette offers distinct valid colors, brand colors first', async () => {
+  const { PIN_COLOR_CHOICES, getPinShades, shadePinColor } = await import('../src/lib/pinColors.ts')
+  const colors = PIN_COLOR_CHOICES.map(choice => parsePinColorCode(choice.color))
+  assert.ok(colors.every(Boolean))
+  assert.equal(new Set(colors).size, colors.length)
+  assert.deepEqual(colors.slice(0, PIN_COLOR_PALETTE.length), PIN_COLOR_PALETTE.map(choice => choice.color))
+  assert.equal(shadePinColor('#336699', 0), '#336699')
+  assert.equal(shadePinColor('#000000', 1), '#FFFFFF')
+  assert.equal(shadePinColor('#FFFFFF', -1), '#000000')
+  assert.equal(shadePinColor('nope', 0.2), null)
+  const shades = getPinShades('#356f68')
+  assert.equal(shades.length, 5)
+  assert.equal(shades[2], '#356F68')
+})

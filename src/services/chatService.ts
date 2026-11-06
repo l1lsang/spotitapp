@@ -21,18 +21,20 @@ import {
   type Unsubscribe,
 } from 'firebase/firestore'
 import { CHAT_REACTION_OPTIONS } from '../lib/chatReactions'
+import { MAX_CHAT_MENTIONS } from '../lib/chatMentions'
 import { requireDb } from '../lib/firebase'
 import { assertCleanContent } from '../lib/contentFilter'
 import type { ChatMessage, ChatParticipant, ChatReactionEmoji, DaymarkChat } from '../types/chat'
 import type { NotificationActor } from '../types/notification'
 import type { DaymarkUser } from '../types/user'
-import { queueNotification } from './notificationService'
 
 type ChatPerson = Pick<DaymarkUser, 'uid' | 'nickname' | 'photoURL'>
 
 interface ChatAttachmentInput {
   photoUrl?: string
   photoName?: string
+  /** "@nickname" → uid for members tagged in a group chat. */
+  mentions?: Record<string, string>
 }
 
 interface TimestampLike {
@@ -297,6 +299,11 @@ export async function sendChatMessage(
   const messageRef = doc(collection(db, 'chats', chatId, 'messages'))
   const batch = writeBatch(db)
   const lastMessage = trimmed || '사진을 보냈습니다.'
+  // Tags exist only in group rooms, only for current members, and only if still in the text.
+  const mentions: Record<string, string> = chat?.kind === 'group'
+    ? Object.fromEntries(Object.entries(attachment.mentions || {}).filter(([label, uid]) =>
+      label.startsWith('@') && label.length > 1 && trimmed.includes(label) && uid !== author.uid && chat.participantIds.includes(uid)).slice(0, MAX_CHAT_MENTIONS))
+    : {}
 
   batch.set(messageRef, {
     id: messageRef.id,
@@ -306,6 +313,9 @@ export async function sendChatMessage(
     content: trimmed,
     photoUrl: attachment.photoUrl || '',
     photoName: attachment.photoName || '',
+    ...(Object.keys(mentions).length ? { mentions } : {}),
+    // notifyChatMessage (backend/functions/chatNotifications.js) notifies every other participant.
+    notify: 'server',
     createdAt: serverTimestamp(),
   })
   batch.update(chatRef, {
@@ -317,13 +327,6 @@ export async function sendChatMessage(
   })
 
   if (!chat || !chat.participantIds.includes(author.uid)) throw new Error('참여 중인 채팅방에만 보낼 수 있습니다.')
-  for (const recipientUid of chat.participantIds) {
-    if (recipientUid === author.uid) continue
-    queueNotification(batch, {
-      recipientUid, actor: author, type: 'chat', title: '새 채팅 메시지',
-      message: `${author.nickname}: ${lastMessage}`, href: `/chats/${chatId}`, chatId,
-    })
-  }
   await batch.commit()
 }
 

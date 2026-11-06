@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Linking, Pressable, Share, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { Pressable, Share, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { Text } from '../components/Typography';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -24,7 +24,8 @@ import { useBlockedUsers, withoutBlocked } from '../hooks/useBlockedUsers';
 import { usePhotoRecordFlow } from '../hooks/usePhotoRecordFlow';
 import { SEOUL_CITY_HALL, useCurrentLocation } from '../hooks/useCurrentLocation';
 import type { NativePlace } from '../lib/placeSearch';
-import { getExternalMapUrl, isValidLocation, type LatLng } from '../lib/mapLocation';
+import { isValidLocation, type LatLng } from '../lib/mapLocation';
+import { openLocationInMaps } from '../lib/mapAppChoice';
 import { getMapScopeGroups } from '../lib/mapHelpers';
 import { readPhotoRecordPrefill, setPhotoRecordPrefill, subscribeMapRecordEvents, type MapRecordEvent, type PhotoRecordPrefill } from '../lib/photoRecordBridge';
 import { formatDateKey } from '../lib/date';
@@ -302,7 +303,7 @@ function PinPreview({ post, onBack }: { post: Post; onBack?: () => void }) {
     <Text accessibilityRole="header" style={m.previewTitle}>{post.title}</Text>
     <View style={[s.row, { gap: 7 }]}><MapPin size={15} color={p.muted} /><Text style={{ flex: 1, color: p.muted, fontSize: 15 }}>{post.placeName}</Text></View>
     <Text style={m.small}>{post.address || '주소가 등록되지 않은 위치입니다.'}</Text><Text style={m.small}>{post.lat.toFixed(5)}, {post.lng.toFixed(5)}</Text>
-    <Pressable accessibilityRole="link" onPress={() => void Linking.openURL(getExternalMapUrl(post)).catch(() => setMessage('지도를 열지 못했습니다.'))} style={[s.row, { gap: 6, alignSelf: 'flex-start', minHeight: 32 }]}><ExternalLink size={14} color={p.primary} /><Text style={m.mapLink}>지도에서 위치 열기</Text></Pressable>
+    <Pressable accessibilityRole="link" onPress={() => openLocationInMaps(post, post.placeName, setMessage)} style={[s.row, { gap: 6, alignSelf: 'flex-start', minHeight: 32 }]}><ExternalLink size={14} color={p.primary} /><Text style={m.mapLink}>지도에서 위치 열기</Text></Pressable>
     <View style={[s.row, { flexWrap: 'wrap', gap: 7, marginBottom: 6 }]}><View style={[s.row, { gap: 5 }]}><CalendarDays size={14} color={p.light} /><Text style={m.meta}>{formatDateKey(post.dateKey)}</Text></View><View style={[s.row, { gap: 5 }]}><UserRound size={14} color={p.light} /><Text style={m.meta}>{post.authorNickname}</Text></View></View>
     {!!message && <Text accessibilityLiveRegion="polite" style={m.small}>{message}</Text>}
     <DirectionsButton key={post.id} destination={post} placeName={post.placeName} />

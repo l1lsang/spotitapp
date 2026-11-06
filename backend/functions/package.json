@@ -3,7 +3,7 @@
   "private": true,
   "main": "index.js",
   "scripts": {
-    "test": "node --test nativePush.test.cjs placeSearch.test.cjs kakaoAuth.test.cjs counters.test.cjs postCleanup.test.cjs userSearch.test.cjs postSearch.test.cjs"
+    "test": "node --test nativePush.test.cjs placeSearch.test.cjs kakaoAuth.test.cjs counters.test.cjs postCleanup.test.cjs userSearch.test.cjs postSearch.test.cjs groups.test.cjs chatNotifications.test.cjs"
   },
   "engines": {
     "node": "24"

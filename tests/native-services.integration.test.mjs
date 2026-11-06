@@ -10,6 +10,7 @@ import { initializeApp, deleteApp } from 'firebase/app'
 import * as firestore from 'firebase/firestore'
 import * as authSdk from 'firebase/auth'
 import * as storageSdk from 'firebase/storage'
+import * as functionsSdk from 'firebase/functions'
 import searchIndex from '../backend/functions/userSearchCore.js'
 import postSearchIndex from '../backend/functions/postSearchCore.js'
 
@@ -39,10 +40,12 @@ async function account(nickname, complete = true) {
   const stubs = {
     'firebase/auth': authSdk,
     'firebase/firestore': firestore,
+    // Group management calls server functions; this suite does not exercise them.
+    'firebase/functions': functionsSdk,
     'expo-constants': { default: { appOwnership: 'expo' } },
     'react-native': { Platform: { OS: 'android' } },
     'expo-crypto': { randomUUID, getRandomValues: data => webcrypto.getRandomValues(data), CryptoDigestAlgorithm: { SHA256: 'SHA-256' }, digestStringAsync: async (_algorithm, value) => createHash('sha256').update(value).digest('hex') },
-    [resolve(root, 'src/lib/firebase.ts')]: { requireAuth: () => auth, requireDb: () => db, requireStorage: () => { throw new Error('Native uploads are not exercised by this emulator suite') } },
+    [resolve(root, 'src/lib/firebase.ts')]: { firebaseApp: app, emulatorHost: '127.0.0.1', requireAuth: () => auth, requireDb: () => db, requireStorage: () => { throw new Error('Native uploads are not exercised by this emulator suite') } },
     [resolve(root, 'src/services/storageService.ts')]: { uploadPostPhotosWithThumbnails: () => { throw new Error('No image uploads in this test') } },
     [resolve(root, 'src/services/pushNotificationService.ts')]: { disablePushNotifications: async () => {} },
   }
@@ -215,6 +218,26 @@ test('private groups preserve invite access, private pin isolation, reactions an
   await assert.rejects(firestore.getDoc(postRef(member, pinId)), denied)
   await assert.rejects(likes.togglePostLike(pinId, member.actor), denied)
   assert.equal((await firestore.getDoc(firestore.doc(owner.db, 'groups', groupId))).data().memberCount, 1)
+
+  // Bans are written only by manageGroup; apps cannot add or lift them.
+  const banRef = client => firestore.doc(client.db, 'groups', groupId, 'bans', member.uid)
+  await assert.rejects(firestore.setDoc(banRef(owner), { uid: member.uid }), denied)
+  // Only the local emulator accepts this bypass. Store the ban as manageGroup would.
+  const banUrl = `http://127.0.0.1:8281/v1/projects/demo-spotit-native/databases/(default)/documents/groups/${groupId}/bans/${member.uid}`
+  const banned = await fetch(banUrl, {
+    method: 'PATCH', headers: { Authorization: 'Bearer owner', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields: { uid: { stringValue: member.uid }, nickname: { stringValue: '가입 멤버' }, photoURL: { stringValue: '' }, bannedBy: { stringValue: owner.uid } } }),
+  })
+  assert.equal(banned.status, 200)
+  assert.equal((await firestore.getDoc(banRef(member))).exists(), true)
+  await assert.rejects(firestore.getDoc(banRef(outsider)), denied)
+  await assert.rejects(firestore.deleteDoc(banRef(member)), denied)
+  await assert.rejects(memberGroups.joinGroupWithCode(code, member.uid), /다시 가입할 수 없어요/)
+  assert.equal((await firestore.getDoc(firestore.doc(owner.db, 'groups', groupId))).data().memberCount, 1)
+  const lifted = await fetch(banUrl, { method: 'DELETE', headers: { Authorization: 'Bearer owner' } })
+  assert.equal(lifted.status, 200)
+  assert.equal(await memberGroups.joinGroupWithCode(code, member.uid), groupId)
+  assert.equal((await firestore.getDoc(firestore.doc(owner.db, 'groups', groupId))).data().memberCount, 2)
 })
 
 test('profiles keep no sign-in email and member search reads only the server-built index', { timeout: 60000 }, async () => {
@@ -480,7 +503,7 @@ test('shared media rules permit staged uploads and protect private posts and gro
 })
 
 
-test('pin sharing writes a readable message, recipient notification and chat preview together', { timeout: 60000 }, async () => {
+test('pin sharing writes a readable message and chat preview, leaving notifications to the server', { timeout: 60000 }, async () => {
   const sender = await account('핀을 보내는 사람')
   const recipient = await account('핀을 받는 사람')
   const outsider = await account('다른 사람')
@@ -492,8 +515,11 @@ test('pin sharing writes a readable message, recipient notification and chat pre
   const messages = await observe((next, fail) => recipientChats.subscribeToChatMessages(chatId, next, fail), rows => rows.length === 1)
   assert.equal(messages[0].content, message)
   assert.equal((await recipientChats.getChatById(chatId, recipient.uid)).lastMessage, message)
+  // notifyChatMessage (backend/functions) fans out notifications for marked messages; the app writes none itself.
+  const stored = await firestore.getDocs(firestore.collection(recipient.db, 'chats', chatId, 'messages'))
+  assert.equal(stored.docs[0].data().notify, 'server')
   const notifications = await firestore.getDocs(firestore.collection(recipient.db, 'users', recipient.uid, 'notifications'))
-  assert.ok(notifications.docs.some(doc => doc.data().chatId === chatId && doc.data().message.includes('share-test-pin')))
+  assert.equal(notifications.docs.filter(doc => doc.data().chatId === chatId).length, 0)
   const outsiderChats = await outsider.service('chat')
   await assert.rejects(outsiderChats.sendChatMessage(chatId, outsider.actor, message), denied)
   assert.equal((await firestore.getDocs(firestore.collection(recipient.db, 'chats', chatId, 'messages'))).size, 1)
