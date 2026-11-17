@@ -60,6 +60,10 @@ export default function MyPostsScreen() {
       <IconButton label="뒤로 가기" onPress={() => router.canGoBack() ? router.back() : router.replace('/profile')} style={{ marginLeft: -10 }}><ChevronLeft size={22} color={p.ink} /></IconButton>
       <Text accessibilityRole="header" style={m.title}>내 기록</Text>
       {!loading && !error && <Text style={m.count}>기록 {posts.length}개</Text>}
+      {/* Book Studio milestone 1: reachable only in development builds until it is finished. */}
+      {__DEV__ && <Pressable accessibilityRole="link" onPress={() => router.push({ pathname: '/books/[bookId]/edit', params: { bookId: 'local' } })} style={m.devLink}>
+        <Text style={m.devLinkText}>책 편집기 (개발용)</Text>
+      </Pressable>}
     </View>
 
     {posts.length > 0 && <ScrollView horizontal showsHorizontalScrollIndicator={false} accessibilityLabel="공개 범위로 보기" style={m.filterScroll} contentContainerStyle={m.filters}>
@@ -93,6 +97,8 @@ const m = StyleSheet.create({
   bar: { flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 52 },
   title: { flex: 1, color: p.ink, fontSize: 18, fontWeight: '700' },
   count: { color: p.muted, fontSize: 13 },
+  devLink: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 8 },
+  devLinkText: { color: p.primary, fontSize: 13, fontWeight: '600' },
   filterScroll: { marginTop: 8, marginBottom: 12, marginHorizontal: -16, flexGrow: 0 },
   filters: { gap: 8, paddingVertical: 2, paddingHorizontal: 16 },
   filter: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 36, paddingVertical: 6, paddingHorizontal: 14, borderWidth: 1, borderColor: p.line, borderRadius: 999, backgroundColor: p.paper },
