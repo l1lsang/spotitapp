@@ -10,8 +10,10 @@ import type { LatLng, PlaceSearchResult } from '../../lib/mapLocation';
 import { formatDistance, splitQueryMatch } from '../../lib/mapHelpers';
 import { getDistanceMeters } from '../../lib/photoMetadata';
 import { searchNativePlaces } from '../../lib/placeSearch';
+import { useKeyChange } from '../../hooks/useKeyChange';
 
 const SEARCH_DELAY_MS = 300;
+const NO_RESULTS: PlaceSearchResult[] = [];
 
 export function MapPlaceSearch({ visible, initialQuery, center, onClose, onSelect }: {
   visible: boolean; initialQuery: string; center: LatLng;
@@ -26,9 +28,15 @@ function SearchPanel({ initialQuery, center, onClose, onSelect }: { initialQuery
   const inputRef = useRef<TextInput>(null);
   const requestRef = useRef(0);
   const [query, setQuery] = useState(initialQuery);
-  const [results, setResults] = useState<PlaceSearchResult[]>([]);
-  const [status, setStatus] = useState<'idle' | 'searching' | 'done' | 'error'>(() => initialQuery.trim() ? 'searching' : 'idle');
-  const [message, setMessage] = useState('');
+  const [searchResults, setResults] = useState<PlaceSearchResult[]>([]);
+  const [searchStatus, setStatus] = useState<'idle' | 'searching' | 'done' | 'error'>(() => initialQuery.trim() ? 'searching' : 'idle');
+  const [searchMessage, setMessage] = useState('');
+  // An empty query shows nothing, even if an earlier search finishes late.
+  const idle = !query.trim();
+  if (useKeyChange(String(idle)) && idle) { setResults([]); setStatus('idle'); setMessage(''); }
+  const results = idle ? NO_RESULTS : searchResults;
+  const status = idle ? 'idle' : searchStatus;
+  const message = idle ? '' : searchMessage;
   const { lat, lng } = center;
 
   const runSearch = useCallback(async (text: string) => {
@@ -47,7 +55,7 @@ function SearchPanel({ initialQuery, center, onClose, onSelect }: { initialQuery
 
   useEffect(() => {
     const trimmed = query.trim();
-    if (!trimmed) { requestRef.current += 1; setResults([]); setStatus('idle'); setMessage(''); return; }
+    if (!trimmed) { requestRef.current += 1; return; }
     const timer = setTimeout(() => void runSearch(trimmed), SEARCH_DELAY_MS);
     return () => clearTimeout(timer);
   }, [query, runSearch]);

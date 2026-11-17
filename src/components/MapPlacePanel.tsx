@@ -9,6 +9,7 @@ import { Dialog } from './Dialog';
 import { SheetGrip, useSheetDismiss } from './map/SheetGrip';
 import { Button, IconButton, Notice, elevation, p } from './ui';
 import { useAuth } from '../hooks/useAuth';
+import { useKeyChange } from '../hooks/useKeyChange';
 import { formatRelativeTime } from '../lib/date';
 import type { NativePlace } from '../lib/placeSearch';
 import { createLivePlaceStatus, subscribePlaceStatusUpdates } from '../services/mapFeatureService';
@@ -26,7 +27,7 @@ export function MapPlacePanel({ place, groupId, canCreatePin, loginFrom, sheet, 
   const insets = useSafeAreaInsets();
   const viewerUid = currentUser?.uid;
   const [updates, setUpdates] = useState<LivePlaceStatusUpdate[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [subscribing, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [revision, setRevision] = useState(0);
   const [writing, setWriting] = useState(false);
@@ -39,10 +40,16 @@ export function MapPlacePanel({ place, groupId, canCreatePin, loginFrom, sheet, 
   const pending = useRef(false);
   const counts = useMemo(() => LIVE_PLACE_STATUS_OPTIONS.map(option => ({ ...option, count: updates.filter(update => update.tags.includes(option.id)).length })).filter(option => option.count > 0), [updates]);
 
-  useEffect(() => {
-    if (!firebaseReady || !viewerUid) { setUpdates([]); setLoading(false); return; }
-    let active = true;
+  // Reviews load only for a signed-in, ready account.
+  const canLoad = firebaseReady && !!viewerUid;
+  const loading = canLoad && subscribing;
+  if (useKeyChange(`${place.id}:${viewerUid}:${firebaseReady}:${revision}`)) {
     setLoading(true); setLoadError('');
+    if (!canLoad) setUpdates([]);
+  }
+  useEffect(() => {
+    if (!firebaseReady || !viewerUid) return;
+    let active = true;
     const unsubscribe = subscribePlaceStatusUpdates(place.id, next => { if (active) { setUpdates(next); setLoading(false); } }, () => {
       if (active) { setLoadError('리뷰를 불러오지 못했습니다. 다시 시도해 주세요.'); setLoading(false); }
     });

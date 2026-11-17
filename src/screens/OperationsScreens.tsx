@@ -12,6 +12,7 @@ import { Avatar, Button, Chip, Empty, Field, Notice, Row, Screen, p } from '../c
 import { PageHeading } from '../components/PageHeading'
 import { useAuth } from '../hooks/useAuth'
 import { useBlockedUsers } from '../hooks/useBlockedUsers'
+import { useKeyChange } from '../hooks/useKeyChange'
 import { OPERATOR_PHONE, OPERATOR_PHONE_URL } from '../lib/operatorContact'
 import { formatTimestamp } from '../lib/date'
 import { policyNavigation, type PolicyId } from '../lib/policyNavigation'
@@ -63,17 +64,28 @@ export function NotificationsScreen() {
   const [pushError, setPushError] = useState(false)
   const [pushBusy, setPushBusy] = useState(false)
   const [readBusy, setReadBusy] = useState(false)
-  const [loading, setLoading] = useState(true)
+  const [subscribing, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [version, setVersion] = useState(0)
   const narrow = useWindowDimensions().width <= 620
-  useEffect(() => {
-    if (!currentUser || !firebaseReady) { setNotifications([]); setLoading(false); return }
+  const uid = currentUser?.uid
+  const loading = !!uid && firebaseReady && subscribing
+  if (useKeyChange(`${uid}:${firebaseReady}:${version}`)) {
     setLoading(true); setError('')
+    if (!uid || !firebaseReady) setNotifications([])
+  }
+  useEffect(() => {
+    if (!uid || !firebaseReady) return
+    const fail = (e: unknown) => { setError(errorText(e)); setLoading(false) }
     try {
-      return subscribeToNotifications(currentUser.uid, items => { setNotifications(items); setLoading(false) }, e => { setError(errorText(e)); setLoading(false) })
-    } catch (e) { setError(errorText(e)); setLoading(false) }
-  }, [currentUser, firebaseReady, version])
+      return subscribeToNotifications(uid, items => { setNotifications(items); setLoading(false) }, fail)
+    } catch (e) {
+      // A setup failure is reported like a snapshot error, after this effect returns.
+      let active = true
+      void Promise.resolve().then(() => { if (active) fail(e) })
+      return () => { active = false }
+    }
+  }, [uid, firebaseReady, version])
   useEffect(() => {
     let active = true
     const refresh = () => { void getPushPermissionStatus().then(status => { if (active) { setPushStatus(status); setPushEnabled(status === 'granted') } }).catch(() => {}) }
@@ -144,12 +156,18 @@ export function SupportScreen() {
   const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(false)
   const requestId = useRef<string | null>(null)
+  const canLoad = !!currentUser && firebaseReady
+  const load = useCallback(() => listMyCases()
+    .then(result => setCases(result.cases), e => setError(errorText(e)))
+    .finally(() => setLoading(false)), [])
   const refresh = useCallback(async () => {
-    if (!currentUser || !firebaseReady) return
+    if (!canLoad) return
     setLoading(true); setError('')
-    try { setCases((await listMyCases()).cases) } catch (e) { setError(errorText(e)) } finally { setLoading(false) }
-  }, [currentUser, firebaseReady])
-  useEffect(() => { void refresh() }, [refresh])
+    await load()
+  }, [canLoad, load])
+  // The history loads when the account is ready, and again for another account.
+  if (useKeyChange(`${currentUser?.uid}:${firebaseReady}`, true) && canLoad) { setLoading(true); setError('') }
+  useEffect(() => { if (canLoad) void load() }, [canLoad, currentUser?.uid, load])
   async function submit() {
     if (busy || !title.trim() || !details.trim()) return
     setBusy(true); setError(''); setSuccess('')
@@ -260,11 +278,15 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => Pr
   const [stats, setStats] = useState<AdminStats | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const load = useCallback(() => getAdminStats(token)
+    .then(setStats, e => setError(errorText(e)))
+    .finally(() => setBusy(false)), [token])
   const refresh = useCallback(async () => {
     setBusy(true); setError('')
-    try { setStats(await getAdminStats(token)) } catch (e) { setError(errorText(e)) } finally { setBusy(false) }
-  }, [token])
-  useEffect(() => { void refresh() }, [refresh])
+    await load()
+  }, [load])
+  if (useKeyChange(token, true)) { setBusy(true); setError('') }
+  useEffect(() => { void load() }, [load])
   const metrics = stats ? [
     { label: '총 사용자', value: stats.users, detail: `최근 7일 가입 ${stats.newUsers}명` },
     { label: '게시 중인 핀', value: stats.posts, detail: `최근 7일 등록 ${stats.newPosts}개` },
@@ -297,9 +319,9 @@ function CasesPanel({ token, onChanged }: { token: string; onChanged: () => Prom
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [version, setVersion] = useState(0)
+  if (useKeyChange(`${token}:${kind}:${status}:${version}`)) { setLoading(true); setError(''); setCases([]); setCursor(null) }
   useEffect(() => {
     let active = true
-    setLoading(true); setError(''); setCases([]); setCursor(null)
     void listAdminCases(token, kind, status).then(result => { if (active) { setCases(result.cases); setCursor(result.nextCursor) } }).catch(e => { if (active) setError(errorText(e)) }).finally(() => { if (active) setLoading(false) })
     return () => { active = false }
   }, [token, kind, status, version])
@@ -364,9 +386,9 @@ function UsersPanel({ token, onChanged }: { token: string; onChanged: () => Prom
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [selected, setSelected] = useState<AdminUser | null>(null)
+  if (useKeyChange(`${token}:${query.field}:${query.search}:${query.version}`)) { setLoading(true); setError(''); setUsers([]); setCursor(null) }
   useEffect(() => {
     let active = true
-    setLoading(true); setError(''); setUsers([]); setCursor(null)
     void searchAdminUsers(token, query.field, query.search).then(result => { if (active) { setUsers(result.users); setCursor(result.nextCursor) } }).catch(e => { if (active) setError(errorText(e)) }).finally(() => { if (active) setLoading(false) })
     return () => { active = false }
   }, [token, query])

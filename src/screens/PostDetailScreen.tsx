@@ -16,6 +16,7 @@ import { PostActionsMenu } from '../components/PostActionsMenu'
 import { CommentThread } from '../components/CommentThread'
 import { useAuth } from '../hooks/useAuth'
 import { useBlockedUsers } from '../hooks/useBlockedUsers'
+import { useKeyChange } from '../hooks/useKeyChange'
 import { unblockUser } from '../services/blockService'
 import { formatDateKey, formatTimestamp } from '../lib/date'
 import { getExternalMapUrl, isValidLocation } from '../lib/mapLocation'
@@ -72,9 +73,10 @@ export default function PostDetailScreen() {
   }, [firebaseReady, postId, uid])
   useFocusEffect(useCallback(() => { void load(); return () => { request.current += 1 } }, [load]))
 
+  const reactionsKey = post?.id && uid && firebaseReady ? `${post.id}:${uid}:${revision}` : ''
+  if (useKeyChange(reactionsKey) && reactionsKey) { setLikeReady(false); setLiked(false); setAvailable(true); setActionError('') }
   useEffect(() => {
     if (!post?.id || !uid || !firebaseReady) return
-    setLikeReady(false); setLiked(false); setAvailable(true); setActionError('')
     const unsubscribers: (() => void)[] = []
     const fail = (e: Error) => { setAvailable(false); setActionError(errorMessage(e)) }
     try {
@@ -83,7 +85,12 @@ export default function PostDetailScreen() {
         else { setAvailable(false); setActionError('삭제된 기록입니다.') }
       }, fail))
       unsubscribers.push(subscribeToLikeStatus(post.id, uid, next => { setLiked(next); setLikeReady(true) }, fail))
-    } catch (e) { setAvailable(false); setActionError(errorMessage(e)) }
+    } catch (e) {
+      // A setup failure is reported like a snapshot error, after this effect returns.
+      let active = true
+      void Promise.resolve().then(() => { if (active) fail(e instanceof Error ? e : new Error(String(e))) })
+      unsubscribers.push(() => { active = false })
+    }
     return () => { unsubscribers.forEach(stop => stop()) }
   }, [post?.id, uid, firebaseReady, revision])
   const jump = useCallback((target: View) => {
