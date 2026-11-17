@@ -8,6 +8,7 @@ import { clusterPosts } from '../lib/mapClusters';
 import { projectMapPoint } from '../lib/mapProjection';
 import { getPostCoverThumbnail, getPostMarkerColor, type Post } from '../types/post';
 import { useAuth } from '../hooks/useAuth';
+import { useKeyChange } from '../hooks/useKeyChange';
 import { PostPhotoPin, PostPin } from './PostPin';
 import { Button, p } from './ui';
 import type { NativeMapProps } from './NativeMap.types';
@@ -31,7 +32,8 @@ function PhotoPin({ uri }: { uri: string }) {
 // marker tracks briefly after it mounts or its look changes, then stops for speed.
 function SnapshotMarker({ settleMs = 700, version = '', ...props }: MapMarkerProps & { settleMs?: number; version?: string }) {
   const [tracking, setTracking] = useState(true);
-  useEffect(() => { setTracking(true); const timer = setTimeout(() => setTracking(false), settleMs); return () => clearTimeout(timer); }, [version, settleMs]);
+  if (useKeyChange(`${version}:${settleMs}`)) setTracking(true);
+  useEffect(() => { const timer = setTimeout(() => setTracking(false), settleMs); return () => clearTimeout(timer); }, [version, settleMs]);
   return <Marker {...props} tracksViewChanges={tracking} />;
 }
 function PhotoMarker({ location, uri }: { location: { lat: number; lng: number }; uri: string }) {
@@ -77,9 +79,9 @@ export default function NativeMap({ center, centerRevision = 0, posts, onSelect,
   const [size, setSize] = useState({ width: 390, height: 700 });
   const [region, setRegion] = useState<Region>({ latitude: center.lat, longitude: center.lng, latitudeDelta: 0.015, longitudeDelta: 0.015 });
   // The region state follows panning, so a revision re-centers on an unchanged target too.
-  useEffect(() => {
+  if (useKeyChange(`${center.lat},${center.lng}:${centerRevision}`)) {
     setRegion(previous => Math.abs(previous.latitude - center.lat) < 0.000001 && Math.abs(previous.longitude - center.lng) < 0.000001 ? previous : { ...previous, latitude: center.lat, longitude: center.lng });
-  }, [center.lat, center.lng, centerRevision]);
+  }
   const zoom = Math.log2(360 * size.width / (256 * Math.max(region.longitudeDelta, 0.000001)));
   const readyPhotos = usePrefetchedPhotos(posts);
   // Coming back to a screen with this map redraws the photo pins (see PostMarker).

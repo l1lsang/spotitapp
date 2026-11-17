@@ -4,6 +4,7 @@ import { Text } from './Typography';
 import { router } from 'expo-router';
 import { Heart, MessageCircle } from 'lucide-react-native';
 import { useAuth } from '../hooks/useAuth';
+import { useKeyChange } from '../hooks/useKeyChange';
 import { subscribeToLikeStatus, subscribeToPostReactions, togglePostLike } from '../services/likeService';
 import type { Post } from '../types/post';
 import { SharePinButton } from './SharePinButton';
@@ -22,17 +23,18 @@ export function PostInteractions({ post, bordered = true }: { post: Post; border
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
   const pending = useRef(false);
+  const uid = currentUser?.uid;
+  if (useKeyChange(`${post.id}:${uid}:${firebaseReady}:${revision}`)) { setReady(false); setLiked(false); setAvailable(true); setOpen(false); setError(''); }
   useEffect(() => {
-    setReady(false); setLiked(false); setAvailable(true); setOpen(false); setError('');
-    if (!currentUser || !firebaseReady) return;
+    if (!uid || !firebaseReady) return;
     const fail = () => { setAvailable(false); setError('반응을 불러오지 못했습니다. 기록이 삭제되었거나 접근 권한이 변경되었을 수 있습니다.'); };
     const stopCounts = subscribeToPostReactions(post.id, next => {
       if (next) setCounts(next);
       else { setAvailable(false); setError('삭제된 기록입니다.'); }
     }, fail);
-    const stopLike = subscribeToLikeStatus(post.id, currentUser.uid, value => { setLiked(value); setReady(true); }, fail);
+    const stopLike = subscribeToLikeStatus(post.id, uid, value => { setLiked(value); setReady(true); }, fail);
     return () => { stopCounts(); stopLike(); };
-  }, [post.id, currentUser?.uid, firebaseReady, revision]);
+  }, [post.id, uid, firebaseReady, revision]);
   async function like() {
     if (!currentUser || !profile) { router.push('/login'); return; }
     if (pending.current || !ready || !available) return;

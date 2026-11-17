@@ -7,6 +7,7 @@ import { RemoteImage } from './RemoteImage';
 import { PostActionsMenu } from './PostActionsMenu';
 import { p } from './ui';
 import { useAuth } from '../hooks/useAuth';
+import { useKeyChange } from '../hooks/useKeyChange';
 import { formatFeedDate, getFeedTone } from '../lib/feedPosts';
 import { openLocationInMaps } from '../lib/mapAppChoice';
 import { subscribeToLikeStatus, subscribeToPostReactions, togglePostLike } from '../services/likeService';
@@ -45,8 +46,8 @@ export function FeedPostCard({ post }: { post: Post }) {
   const openDetail = () => router.push({ pathname: '/posts/[postId]', params: { postId: post.id } });
 
   // The list keeps only nearby cards mounted, so each card subscribes while it exists.
+  if (useKeyChange(`${post.id}:${uid}:${firebaseReady}`)) { setReady(false); setLiked(false); setAvailable(true); setError(''); }
   useEffect(() => {
-    setReady(false); setLiked(false); setAvailable(true); setError('');
     if (!firebaseReady || !uid) return;
     const fail = () => { setAvailable(false); setError('반응을 불러오지 못했어요. 기록이 삭제되었거나 볼 수 없게 되었을 수 있어요.'); };
     const stopCounts = subscribeToPostReactions(post.id, next => {

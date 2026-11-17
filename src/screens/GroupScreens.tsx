@@ -13,6 +13,7 @@ import { PostCard } from '../components/PostCard';
 import { useAuth } from '../hooks/useAuth';
 import { useBlockedUsers, withoutBlocked } from '../hooks/useBlockedUsers';
 import { useGroups } from '../hooks/useGroups';
+import { useKeyChange } from '../hooks/useKeyChange';
 import { createGroup, getGroupInviteCode, joinGroupWithCode, openGroupChat, setGroupMembership } from '../services/groupService';
 import { subscribeGroupPosts } from '../services/postService';
 import { GROUP_ROLE_LABELS, getGroupInputError, getGroupRole, isGroupInviteCode, normalizeGroupInviteCode, type GroupVisibility, type PinGroup } from '../types/group';
@@ -48,7 +49,13 @@ function JoinGroupDialog({ visible, groupId, initialCode = '', onClose, onJoined
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const pending = useRef(false);
-  useEffect(() => { if (visible) { setCode(initialCode); setError(''); } }, [visible, initialCode]);
+  // Opening the dialog (or a new shared code while open) starts from that code.
+  const openedCode = visible ? initialCode : null;
+  const [shownCode, setShownCode] = useState<string | null>(null);
+  if (openedCode !== shownCode) {
+    setShownCode(openedCode);
+    if (openedCode !== null) { setCode(openedCode); setError(''); }
+  }
   async function join() {
     if (!currentUser || pending.current) return;
     pending.current = true; setBusy(true); setError('');
@@ -71,7 +78,12 @@ function CreateGroupDialog({ visible, onClose, onCreated }: { visible: boolean; 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const pending = useRef(false);
-  useEffect(() => { if (visible) { setName(''); setDescription(''); setVisibility('public'); setError(''); } }, [visible]);
+  // Each opening starts from an empty form.
+  const [wasVisible, setWasVisible] = useState(false);
+  if (visible !== wasVisible) {
+    setWasVisible(visible);
+    if (visible) { setName(''); setDescription(''); setVisibility('public'); setError(''); }
+  }
   async function create() {
     if (!currentUser || pending.current) return;
     const input = { name, description, visibility };
@@ -164,7 +176,7 @@ export function GroupDetailScreen() {
   const [allPosts, setPosts] = useState<Post[]>([]);
   const { ids: blockedIds } = useBlockedUsers();
   const posts = useMemo(() => withoutBlocked(allPosts, blockedIds), [allPosts, blockedIds]);
-  const [loading, setLoading] = useState(false);
+  const [subscribing, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
   const [gridWidth, setGridWidth] = useState(0);
@@ -179,12 +191,13 @@ export function GroupDetailScreen() {
   const [chatError, setChatError] = useState('');
   const role = group && joined ? getGroupRole(group, currentUser?.uid) : 'member';
   const map = () => router.push({ pathname: '/map', params: { group: groupId } });
+  const uid = currentUser?.uid;
+  const loading = !!uid && firebaseReady && canRead && subscribing;
+  if (useKeyChange(`${groupId}:${uid}:${firebaseReady}:${canRead}:${group?.visibility}:${revision}`)) { setPosts([]); setError(''); setLoading(true); }
   useEffect(() => {
-    setPosts([]); setError('');
-    if (!currentUser || !firebaseReady || !canRead) { setLoading(false); return; }
-    setLoading(true);
+    if (!uid || !firebaseReady || !canRead) return;
     return subscribeGroupPosts(groupId, next => { setPosts(next); setLoading(false); }, () => { setPosts([]); setError('그룹 핀을 불러오지 못했습니다.'); setLoading(false); }, group?.visibility);
-  }, [groupId, currentUser?.uid, firebaseReady, canRead, group?.visibility, revision]);
+  }, [groupId, uid, firebaseReady, canRead, group?.visibility, revision]);
   // Private groups are sent with their invite code, which only members can read.
   useEffect(() => {
     if (!sharing || group?.visibility !== 'private' || !joined) return;
@@ -257,9 +270,9 @@ function GroupInvitePanel({ groupId }: { groupId: string }) {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [revision, setRevision] = useState(0);
+  if (useKeyChange(`${groupId}:${revision}`)) { setCode(''); setError(''); setMessage(''); }
   useEffect(() => {
     let cancelled = false;
-    setCode(''); setError(''); setMessage('');
     void getGroupInviteCode(groupId).then(next => { if (!cancelled) setCode(next); }, () => { if (!cancelled) setError('초대코드를 불러오지 못했습니다.'); });
     return () => { cancelled = true; };
   }, [groupId, revision]);

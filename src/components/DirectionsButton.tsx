@@ -4,6 +4,7 @@ import { Text } from './Typography';
 import { BusFront, Car, Footprints, Route } from 'lucide-react-native'
 import { useCurrentLocation } from '../hooks/useCurrentLocation'
 import { useAuth } from '../hooks/useAuth'
+import { useKeyChange } from '../hooks/useKeyChange'
 import { startMapDirections, type TravelMode } from '../lib/mapDirections'
 import { openDirectionsUrl } from '../lib/openDirectionsUrl'
 import { mapAppLabels, type LatLng, type MapApp } from '../lib/mapLocation'
@@ -36,12 +37,15 @@ export function DirectionsButton({ destination, placeName }: { destination: LatL
     void loadPreferredMapApp().then(value => { if (active) setApp(value) })
     return () => { active = false }
   }, [])
+  // A new destination or account closes the sheet and drops any pending request.
+  const uid = currentUser?.uid
+  if (useKeyChange(`${destination.lat},${destination.lng}:${uid}`)) { setVisible(false); setBusy(null); setMessage('') }
   useEffect(() => {
-    revision.current++
+    const requests = revision
+    requests.current++
     locked.current = false
-    setVisible(false); setBusy(null); setMessage('')
-    return () => { revision.current++ }
-  }, [destination.lat, destination.lng, currentUser?.uid])
+    return () => { requests.current++ }
+  }, [destination.lat, destination.lng, uid])
 
   function close() {
     revision.current++

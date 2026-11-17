@@ -5,6 +5,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { router, useIsFocused, usePathname } from 'expo-router';
 import { Bell, List, LogIn, Map, MessageCircle, User, UsersRound } from 'lucide-react-native';
 import { useAuth } from '../hooks/useAuth';
+import { useKeyChange } from '../hooks/useKeyChange';
 import { subscribeToUnreadNotificationCount } from '../services/notificationService';
 import { BrandLogo } from './BrandLogo';
 import { useKeyboardVisible } from './keyboard';
@@ -53,11 +54,12 @@ export function SiteHeader() {
   const { currentUser, profile, accountReady: firebaseReady } = useAuth();
   const { width } = useWindowDimensions();
   const [unread, setUnread] = useState(0);
+  const uid = currentUser?.uid;
+  if (useKeyChange(`${uid}:${firebaseReady}`)) setUnread(0);
   useEffect(() => {
-    setUnread(0);
-    if (!currentUser || !firebaseReady) return;
-    return subscribeToUnreadNotificationCount(currentUser.uid, setUnread, () => setUnread(0));
-  }, [currentUser?.uid, firebaseReady]);
+    if (!uid || !firebaseReady) return;
+    return subscribeToUnreadNotificationCount(uid, setUnread, () => setUnread(0));
+  }, [uid, firebaseReady]);
   if (!header) return null;
   return <SafeAreaView edges={['top']} style={{ backgroundColor: p.bg }}><View style={[styles.header, width > 860 && { minHeight: 80, paddingHorizontal: 40 }]}>
     <Pressable accessibilityRole="link" accessibilityLabel="피노리 지도 홈" onPress={() => router.push('/map')} style={styles.brandLink}>

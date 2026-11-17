@@ -17,6 +17,7 @@ import { unblockUser } from '../services/blockService'
 import { formatTimestamp } from '../lib/date'
 import { PinAlbumGrid } from '../components/PinAlbumGrid'
 import { useAuth } from '../hooks/useAuth'
+import { useKeyChange } from '../hooks/useKeyChange'
 import { useLikedPosts, useProfileAlbum, type LikedPostsState, type ProfileAlbumState } from '../hooks/useProfileAlbum'
 import { policyNavigation } from '../lib/policyNavigation'
 import { OPERATOR_PHONE, OPERATOR_PHONE_URL } from '../lib/operatorContact'
@@ -290,9 +291,9 @@ function FollowList({ user, kind, manage = false, onClose, onChanged }: {
   const lock = useRef(false)
   const [revision, setRevision] = useState(0)
   const title = kind === 'followers' ? '팔로워' : '팔로잉'
+  if (useKeyChange(`${user.uid}:${kind}:${revision}`)) { setLoading(true); setError('') }
   useEffect(() => {
     let active = true
-    setLoading(true); setError('')
     const request = kind === 'followers' ? getFollowers(user.uid) : getFollowing(user.uid)
     request.then(next => { if (active) setPeople(sortedPeople(next)) })
       .catch(err => { if (active) setError(authErrorMessage(err, '목록을 불러오지 못했습니다.')) })
@@ -361,15 +362,26 @@ export function ProfileSettingsScreen() {
     }
   }, [profile])
 
+  // Only the latest request may update the list; a newer one or leaving the screen voids it.
+  const fetchRequests = useCallback((revision: number) => {
+    if (!uid) return Promise.resolve()
+    return getIncomingFollowRequests(uid)
+      .then(result => { if (revision === requestRevision.current) setRequests(sortedPeople(result)) },
+        err => { if (revision === requestRevision.current) setRequestsError(authErrorMessage(err, '팔로우 요청을 불러오지 못했습니다.')) })
+      .finally(() => { if (revision === requestRevision.current) setRequestsLoading(false) })
+  }, [uid])
   const loadRequests = useCallback(async () => {
     if (!uid) return
     const revision = ++requestRevision.current
     setRequestsLoading(true); setRequestsError('')
-    try { const result = await getIncomingFollowRequests(uid); if (revision === requestRevision.current) setRequests(sortedPeople(result)) }
-    catch (err) { if (revision === requestRevision.current) setRequestsError(authErrorMessage(err, '팔로우 요청을 불러오지 못했습니다.')) }
-    finally { if (revision === requestRevision.current) setRequestsLoading(false) }
-  }, [uid])
-  useEffect(() => { void loadRequests(); return () => { requestRevision.current++ } }, [loadRequests])
+    await fetchRequests(revision)
+  }, [uid, fetchRequests])
+  if (useKeyChange(String(uid), true) && uid) { setRequestsLoading(true); setRequestsError('') }
+  useEffect(() => {
+    const requests = requestRevision
+    void fetchRequests(++requests.current)
+    return () => { requests.current++ }
+  }, [fetchRequests])
 
   async function save() {
     if (!currentUser || actionLock.current) return
