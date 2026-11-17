@@ -274,9 +274,11 @@ async function collect(dependency) {
   }
   const license = dependency.license || metadata.license || metadata.licenses?.map(item => item.type).join(' OR ')
   if (!documents.length) documents = await upstreamDocuments(metadata, registry)
-  if (!documents.length && license === 'MIT') {
+  const publicDomain = /^public domain$/i.test(license || '')
+  if (!documents.length && (license === 'MIT' || publicDomain)) {
     // A few publishers declare MIT but ship no license file, including at their publishing commit.
     // Preserve their actual attribution separately; never invent a copyright owner or year.
+    // Public-domain releases (e.g. jsonify) have no terms to reproduce, only the publisher's declaration.
     const source = `https://registry.npmjs.org/${encodeURIComponent(dependency.name)}/${dependency.version}`
     documents.push({
       title: 'Package license declaration and attribution', source,
@@ -294,11 +296,13 @@ async function collect(dependency) {
       }
       break
     }
-    const standardSource = 'https://raw.githubusercontent.com/spdx/license-list-data/v3.26.0/json/details/MIT.json'
-    const standard = JSON.parse(await getText(standardSource)).licenseText
-    // SPDX's copyright line is a placeholder, not an attribution for these packages.
-    documents.push({ title: 'MIT standard license terms (attribution above)', source: standardSource,
-      text: standard.slice(standard.indexOf('Permission is hereby granted')) })
+    if (!publicDomain) {
+      const standardSource = 'https://raw.githubusercontent.com/spdx/license-list-data/v3.26.0/json/details/MIT.json'
+      const standard = JSON.parse(await getText(standardSource)).licenseText
+      // SPDX's copyright line is a placeholder, not an attribution for these packages.
+      documents.push({ title: 'MIT standard license terms (attribution above)', source: standardSource,
+        text: standard.slice(standard.indexOf('Permission is hereby granted')) })
+    }
   }
   if (!license || !documents.length) throw new Error(`${key}: license/notice missing (gitHead: ${registry?.gitHead || 'none'})`)
   const uniqueDocuments = new Map()
