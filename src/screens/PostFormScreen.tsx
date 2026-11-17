@@ -103,14 +103,15 @@ export default function PostFormScreen() {
   // The bridge only carries the photos to this screen; a later visit starts clean.
   useEffect(() => () => { if (photoPrefill) setPhotoRecordPrefill(null); }, [photoPrefill]);
   // The nearest place fills empty fields once; anything the user typed stays.
-  useEffect(() => {
-    if (!nearestPlace) return;
+  const [suggestedPlace, setSuggestedPlace] = useState<typeof nearestPlace | undefined>(undefined);
+  if (nearestPlace && nearestPlace !== suggestedPlace) {
+    setSuggestedPlace(nearestPlace);
     setForm((previous) => previous.placeName || previous.address ? previous : {
       ...previous,
       placeName: nearestPlace.name.slice(0, PLACE_NAME_MAX_LENGTH),
       address: nearestPlace.address,
     });
-  }, [nearestPlace]);
+  }
   useEffect(() => {
     let active = true;
     if (!params.postId || !currentUser) return;

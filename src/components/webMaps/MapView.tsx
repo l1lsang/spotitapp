@@ -4,6 +4,7 @@ import { createMapDriver, prepareMapSdk, type MapDriver } from '../../lib/webMap
 import { isValidLocation, type LatLng } from '../../lib/mapLocation'
 import type { PinTheme, Post } from '../../types/post'
 import { createPostMarkerContent } from './PostMarker'
+import { useKeyChange } from '../../hooks/useKeyChange'
 
 interface MapViewProps {
   center: LatLng
@@ -38,12 +39,11 @@ export function MapView({
     latestRef.current = { center, onMapClick, onMarkerClick, onClusterClick, onCenterIdle }
   }, [center, onMapClick, onMarkerClick, onClusterClick, onCenterIdle])
 
+  if (useKeyChange(String(attempt))) { setStatus('loading'); setMessage('') }
   useEffect(() => {
     let canceled = false
     let driver: MapDriver | undefined
     let observer: ResizeObserver | undefined
-    setStatus('loading')
-    setMessage('')
     prepareMapSdk().then(() => {
       if (canceled || !containerRef.current) return
       driver = createMapDriver(containerRef.current, latestRef.current.center,
