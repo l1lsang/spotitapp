@@ -81,6 +81,7 @@
     "lint": "expo lint",
     "postinstall": "patch-package",
     "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test && npm --prefix backend/functions test && npm run lint",
     "test:push": "node --test backend/functions/nativePush.test.cjs",
     "test:places": "node --test backend/functions/placeSearch.test.cjs",
     "test:kakao": "node --test backend/functions/kakaoAuth.test.cjs",
