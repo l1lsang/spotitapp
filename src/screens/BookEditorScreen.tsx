@@ -1,17 +1,24 @@
 import { useState, type ReactNode } from 'react'
-import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native'
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { router } from 'expo-router'
+import { useFonts } from 'expo-font'
 import { randomUUID } from 'expo-crypto'
-import { Check, ChevronLeft, ImagePlus, Minus, PenLine, Plus, SquareDashed, Trash2, Type } from 'lucide-react-native'
+import {
+  BringToFront, Check, ChevronLeft, CopyPlus, Files, ImagePlus, Minus, Palette, PenLine, Plus, Redo2, RotateCw,
+  SendToBack, SquareDashed, Trash2, Type, Undo2, ALargeSmall,
+} from 'lucide-react-native'
 import { Text } from '../components/Typography'
-import { IconButton, Notice, p } from '../components/ui'
+import { Button, IconButton, Notice, p } from '../components/ui'
 import { BookPageCanvas } from '../components/book/BookPageCanvas'
 import { PinPhotoPicker } from '../components/book/PinPhotoPicker'
 import { TextEditDialog } from '../components/book/TextEditDialog'
+import { PageStrip } from '../components/book/PageStrip'
+import { BackgroundPanel, PagesPanel, TextStylePanel } from '../components/book/EditorPanels'
 import { useAuth } from '../hooks/useAuth'
-import { useBookEditor } from '../hooks/useBookEditor'
-import { canAddElement, currentPage, MAX_ELEMENTS_PER_PAGE } from '../lib/book/editor'
+import { useBookEditor, type BlockedReason } from '../hooks/useBookEditor'
+import { canAddElement, canAddPage, currentPage, MAX_ELEMENTS_PER_PAGE } from '../lib/book/editor'
+import { NO_TRANSFORM } from '../lib/book/geometry'
 import { getBookSpec } from '../lib/book/specs'
 import type { SaveStatus } from '../lib/book/saveQueue'
 
@@ -22,7 +29,20 @@ const SAVE_LABEL: Record<SaveStatus, string> = {
   error: '저장 안 됨',
 }
 
+const BLOCKED_TEXT: Record<BlockedReason, string> = {
+  newer: '이 책은 더 새로운 버전의 앱에서 저장됐어요. 앱을 업데이트한 뒤 열어 주세요.',
+  unreadable: '이 기기에 저장된 책이 손상돼 열 수 없어요.',
+  failed: '이 기기에 저장된 책을 열지 못했어요. 앱을 다시 열어 주세요.',
+}
+
+// Book faces load with the editor only, not at app start.
+const BOOK_FONT_FILES = {
+  'GowunBatang-Regular': require('../../assets/fonts/book/GowunBatang-Regular.ttf'),
+  'NanumPen-Regular': require('../../assets/fonts/book/NanumPenScript-Regular.ttf'),
+}
+
 type TextEdit = { id: string | null; text: string }
+type Panel = 'text-style' | 'background' | 'pages' | null
 
 export default function BookEditorScreen({ bookId }: { bookId: string }) {
   const { currentUser } = useAuth()
@@ -30,26 +50,46 @@ export default function BookEditorScreen({ bookId }: { bookId: string }) {
   return currentUser ? <Editor uid={currentUser.uid} bookId={bookId} /> : null
 }
 
+function leave() {
+  if (router.canGoBack()) router.back()
+  else router.replace('/my')
+}
+
 function Editor({ uid, bookId }: { uid: string; bookId: string }) {
-  const { editor, loadError, dispatch, saveStatus, retrySave } = useBookEditor(uid, bookId)
+  const [fontsLoaded, fontError] = useFonts(BOOK_FONT_FILES)
+  const { editor, blocked, dispatch, canUndo, canRedo, saveStatus, retrySave, discardAndStart } = useBookEditor(uid, bookId)
   const [showGuides, setShowGuides] = useState(true)
   const [picking, setPicking] = useState(false)
   const [textEdit, setTextEdit] = useState<TextEdit | null>(null)
+  const [panel, setPanel] = useState<Panel>(null)
+  const [confirmDiscard, setConfirmDiscard] = useState(false)
 
-  const leave = () => { if (router.canGoBack()) router.back(); else router.replace('/my') }
-  const now = () => new Date().toISOString()
-
-  if (!editor) return <SafeAreaView style={styles.screen} edges={['top', 'bottom']}>
+  if (!editor || (!fontsLoaded && !fontError)) return <SafeAreaView style={styles.screen} edges={['top', 'bottom']}>
     <View style={styles.top}><IconButton label="뒤로 가기" onPress={leave}><ChevronLeft size={22} color={p.ink} /></IconButton></View>
-    <View style={styles.center}>{loadError ? <Notice error>{loadError}</Notice> : <ActivityIndicator color={p.primary} />}</View>
+    <View style={styles.center}>
+      {blocked ? <View style={styles.blocked}>
+        <Notice error>{BLOCKED_TEXT[blocked]}</Notice>
+        {blocked === 'unreadable' && (confirmDiscard
+          ? <>
+            <Text style={styles.blockedText}>지우면 이 기기에 남은 내용은 되찾을 수 없어요.</Text>
+            <View style={styles.blockedActions}>
+              <Button variant="secondary" title="취소" onPress={() => setConfirmDiscard(false)} />
+              <Button variant="danger" title="지우고 새로 시작" onPress={() => { setConfirmDiscard(false); void discardAndStart().catch(() => undefined) }} />
+            </View>
+          </>
+          : <Button variant="secondary" title="지우고 새로 시작하기" onPress={() => setConfirmDiscard(true)} />)}
+      </View> : <ActivityIndicator color={p.primary} />}
+    </View>
   </SafeAreaView>
 
   const spec = getBookSpec(editor.draft.specId)
+  const pages = editor.draft.pages
   const page = currentPage(editor)
   const selected = page.elements.find(element => element.id === editor.selectedId) ?? null
   const full = !canAddElement(editor)
-  const resize = (factor: number) => {
-    if (selected) dispatch({ type: 'transform', id: selected.id, transform: { dxMm: 0, dyMm: 0, scale: factor, dRotationDeg: 0 }, now: now() })
+  const now = () => new Date().toISOString()
+  const transform = (part: Partial<typeof NO_TRANSFORM>) => {
+    if (selected) dispatch({ type: 'transform', id: selected.id, transform: { ...NO_TRANSFORM, ...part }, now: now() })
   }
   const openText = (id: string) => {
     const element = page.elements.find(item => item.id === id)
@@ -61,6 +101,9 @@ function Editor({ uid, bookId }: { uid: string; bookId: string }) {
     else dispatch({ type: 'add-text', id: randomUUID(), text, now: now() })
     setTextEdit(null)
   }
+  const addPage = () => dispatch({ type: 'add-page', pageId: randomUUID(), now: now() })
+  // A text style panel belongs to the selected text; it closes with the selection.
+  const openPanel: Panel = panel === 'text-style' && selected?.type !== 'text' ? null : panel
 
   return <SafeAreaView style={styles.screen} edges={['top', 'bottom']}>
     <View style={styles.top}>
@@ -68,11 +111,13 @@ function Editor({ uid, bookId }: { uid: string; bookId: string }) {
       <View style={styles.heading}>
         <Text numberOfLines={1} style={styles.title}>{editor.draft.title || '제목 없는 책'}</Text>
         <Pressable accessibilityRole="button" disabled={saveStatus !== 'error'} onPress={retrySave} accessibilityLabel={saveStatus === 'error' ? '저장 안 됨, 다시 저장' : SAVE_LABEL[saveStatus]}>
-          <Text style={[styles.status, saveStatus === 'error' && styles.statusError]}>
-            {spec.label} · {SAVE_LABEL[saveStatus]}{saveStatus === 'error' ? ' · 다시 저장' : ''}
+          <Text numberOfLines={1} style={[styles.status, saveStatus === 'error' && styles.statusError]}>
+            {editor.pageIndex + 1}/{pages.length}쪽 · {SAVE_LABEL[saveStatus]}{saveStatus === 'error' ? ' · 다시 저장' : ''}
           </Text>
         </Pressable>
       </View>
+      <IconButton label="되돌리기" disabled={!canUndo} onPress={() => dispatch({ type: 'undo' })}><Undo2 size={20} color={p.ink} /></IconButton>
+      <IconButton label="다시 하기" disabled={!canRedo} onPress={() => dispatch({ type: 'redo' })}><Redo2 size={20} color={p.ink} /></IconButton>
       <IconButton label={showGuides ? '인쇄 안내선 숨기기' : '인쇄 안내선 보기'} selected={showGuides} onPress={() => setShowGuides(value => !value)}>
         <SquareDashed size={20} color={showGuides ? p.primary : p.muted} />
       </IconButton>
@@ -80,29 +125,57 @@ function Editor({ uid, bookId }: { uid: string; bookId: string }) {
 
     <View style={styles.workspace}>
       <BookPageCanvas
+        key={page.id}
         page={page} spec={spec} selectedId={editor.selectedId} showGuides={showGuides}
         onSelect={id => dispatch({ type: 'select', id })}
-        onTransform={(id, transform) => dispatch({ type: 'transform', id, transform, now: now() })}
+        onTransform={(id, change) => dispatch({ type: 'transform', id, transform: change, now: now() })}
         onEditText={openText}
         onTextHeight={(id, hMm) => dispatch({ type: 'measure-text', id, hMm })}
       />
     </View>
 
-    {full && !selected && <View style={styles.notice}><Notice>한 쪽에는 요소를 {MAX_ELEMENTS_PER_PAGE}개까지 넣을 수 있어요.</Notice></View>}
-    <View style={styles.toolbar} accessibilityRole="toolbar">
-      {selected
-        ? <>
-          {selected.type === 'text' && <Tool label="글 고치기" onPress={() => openText(selected.id)}><PenLine size={20} color={p.ink} /></Tool>}
-          <Tool label="작게" onPress={() => resize(1 / 1.1)}><Minus size={20} color={p.ink} /></Tool>
-          <Tool label="크게" onPress={() => resize(1.1)}><Plus size={20} color={p.ink} /></Tool>
-          <Tool label="삭제" danger onPress={() => dispatch({ type: 'delete', id: selected.id, now: now() })}><Trash2 size={20} color={p.danger} /></Tool>
-          <Tool label="완료" onPress={() => dispatch({ type: 'select', id: null })}><Check size={20} color={p.primary} /></Tool>
-        </>
-        : <>
-          <Tool label="사진" disabled={full} onPress={() => setPicking(true)}><ImagePlus size={20} color={p.ink} /></Tool>
-          <Tool label="글" disabled={full} onPress={() => setTextEdit({ id: null, text: '' })}><Type size={20} color={p.ink} /></Tool>
-        </>}
-    </View>
+    {openPanel === 'text-style' && selected?.type === 'text'
+      ? <TextStylePanel element={selected} onDone={() => setPanel(null)}
+          onStyle={style => dispatch({ type: 'set-text-style', id: selected.id, style, now: now() })} />
+      : openPanel === 'background'
+        ? <BackgroundPanel spec={spec} background={page.background} pageCount={pages.length} onDone={() => setPanel(null)}
+            onPick={background => dispatch({ type: 'set-background', background, allPages: false, now: now() })}
+            onApplyAll={() => dispatch({ type: 'set-background', background: page.background, allPages: true, now: now() })} />
+        : openPanel === 'pages'
+          ? <PagesPanel spec={spec} pageIndex={editor.pageIndex} pageCount={pages.length} canAdd={canAddPage(editor)} onDone={() => setPanel(null)}
+              onMove={to => dispatch({ type: 'move-page', to, now: now() })}
+              onAdd={addPage}
+              onDuplicate={() => dispatch({ type: 'duplicate-page', pageId: randomUUID(), elementIds: page.elements.map(() => randomUUID()), now: now() })}
+              onDelete={() => dispatch({ type: 'delete-page', now: now() })} />
+          : <>
+            <PageStrip pages={pages} spec={spec} pageIndex={editor.pageIndex} canAdd={canAddPage(editor)}
+              onOpen={index => dispatch({ type: 'go-page', index })} onAdd={addPage} />
+            {full && !selected && <View style={styles.notice}><Notice>한 쪽에는 요소를 {MAX_ELEMENTS_PER_PAGE}개까지 넣을 수 있어요.</Notice></View>}
+            {selected
+              ? <View style={styles.toolbar} accessibilityRole="toolbar">
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.toolScroll}>
+                  {selected.type === 'text' && <>
+                    <Tool label="글 고치기" onPress={() => openText(selected.id)}><PenLine size={20} color={p.ink} /></Tool>
+                    <Tool label="스타일" onPress={() => setPanel('text-style')}><ALargeSmall size={20} color={p.ink} /></Tool>
+                  </>}
+                  <Tool label="작게" onPress={() => transform({ scale: 1 / 1.1 })}><Minus size={20} color={p.ink} /></Tool>
+                  <Tool label="크게" onPress={() => transform({ scale: 1.1 })}><Plus size={20} color={p.ink} /></Tool>
+                  <Tool label="90° 회전" onPress={() => transform({ dRotationDeg: 90 })}><RotateCw size={20} color={p.ink} /></Tool>
+                  <Tool label="앞으로" onPress={() => dispatch({ type: 'arrange', id: selected.id, to: 'forward', now: now() })}><BringToFront size={20} color={p.ink} /></Tool>
+                  <Tool label="뒤로" onPress={() => dispatch({ type: 'arrange', id: selected.id, to: 'backward', now: now() })}><SendToBack size={20} color={p.ink} /></Tool>
+                  <Tool label="복제" disabled={full} onPress={() => dispatch({ type: 'duplicate', id: selected.id, newId: randomUUID(), now: now() })}><CopyPlus size={20} color={p.ink} /></Tool>
+                  <Tool label="삭제" danger onPress={() => dispatch({ type: 'delete', id: selected.id, now: now() })}><Trash2 size={20} color={p.danger} /></Tool>
+                </ScrollView>
+                <View style={styles.toolDivider} />
+                <Tool label="완료" onPress={() => dispatch({ type: 'select', id: null })}><Check size={20} color={p.primary} /></Tool>
+              </View>
+              : <View style={[styles.toolbar, styles.toolbarEven]} accessibilityRole="toolbar">
+                <Tool label="사진" disabled={full} onPress={() => setPicking(true)}><ImagePlus size={20} color={p.ink} /></Tool>
+                <Tool label="글" disabled={full} onPress={() => setTextEdit({ id: null, text: '' })}><Type size={20} color={p.ink} /></Tool>
+                <Tool label="배경" onPress={() => setPanel('background')}><Palette size={20} color={p.ink} /></Tool>
+                <Tool label="페이지" onPress={() => setPanel('pages')}><Files size={20} color={p.ink} /></Tool>
+              </View>}
+          </>}
 
     <PinPhotoPicker uid={uid} visible={picking} onClose={() => setPicking(false)}
       onPick={ref => dispatch({ type: 'add-image', id: randomUUID(), ref, now: now() })} />
@@ -114,21 +187,27 @@ function Tool({ label, onPress, children, disabled = false, danger = false }: { 
   return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled }} disabled={disabled} onPress={onPress}
     style={({ pressed }) => [styles.tool, (pressed || disabled) && { opacity: disabled ? 0.4 : 0.6 }]}>
     {children}
-    <Text style={[styles.toolLabel, danger && { color: p.danger }]}>{label}</Text>
+    <Text numberOfLines={1} style={[styles.toolLabel, danger && { color: p.danger }]}>{label}</Text>
   </Pressable>
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: p.paper },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
-  top: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 6, minHeight: 56, borderBottomWidth: 1, borderColor: p.line },
-  heading: { flex: 1, gap: 1 },
+  blocked: { alignSelf: 'stretch', gap: 12 },
+  blockedText: { fontSize: 15, lineHeight: 23, color: p.ink },
+  blockedActions: { flexDirection: 'row', gap: 8, justifyContent: 'flex-end' },
+  top: { flexDirection: 'row', alignItems: 'center', gap: 0, paddingHorizontal: 4, minHeight: 56, borderBottomWidth: 1, borderColor: p.line },
+  heading: { flex: 1, gap: 1, paddingLeft: 2 },
   title: { fontSize: 16, fontWeight: '600', color: p.ink },
   status: { fontSize: 13, color: p.muted },
   statusError: { color: p.danger },
   workspace: { flex: 1, backgroundColor: p.surface },
-  notice: { paddingHorizontal: 16, paddingTop: 8, backgroundColor: p.paper },
-  toolbar: { flexDirection: 'row', justifyContent: 'space-around', paddingTop: 6, paddingBottom: 4, borderTopWidth: 1, borderColor: p.line, backgroundColor: p.paper },
-  tool: { minWidth: 56, minHeight: 52, alignItems: 'center', justifyContent: 'center', gap: 3, paddingHorizontal: 6 },
+  notice: { paddingHorizontal: 16, paddingTop: 4, backgroundColor: p.paper },
+  toolbar: { flexDirection: 'row', alignItems: 'center', paddingTop: 4, paddingBottom: 4, borderTopWidth: 1, borderColor: p.line, backgroundColor: p.paper },
+  toolbarEven: { justifyContent: 'space-around' },
+  toolScroll: { paddingHorizontal: 6 },
+  toolDivider: { width: 1, alignSelf: 'stretch', marginVertical: 8, backgroundColor: p.line },
+  tool: { minWidth: 58, minHeight: 52, alignItems: 'center', justifyContent: 'center', gap: 3, paddingHorizontal: 6 },
   toolLabel: { fontSize: 13, color: p.ink },
 })
