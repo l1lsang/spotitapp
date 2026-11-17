@@ -46,3 +46,14 @@ test('shared groups open the group and carry a private group invite code', async
   assert.equal(getSharedGroupFromMessage('[피노리 그룹]\n이름\n공개 그룹\nhttps://evil.example/groups/g-1'), null)
   assert.equal(getSharedGroupFromMessage('[피노리 그룹]\n이름\n공개 그룹\nhttps://www.pinori.kr/posts/g-1'), null)
 })
+
+test('the site address works with or without a scheme and falls back when unusable', async () => {
+  const { normalizeWebOrigin } = await import('../src/lib/webOrigin.ts')
+  assert.equal(normalizeWebOrigin('www.pinori.kr'), 'https://www.pinori.kr')
+  assert.equal(normalizeWebOrigin('https://www.pinori.kr/'), 'https://www.pinori.kr')
+  assert.equal(normalizeWebOrigin(' HTTPS://Pinori.kr/path?x=1 '), 'https://pinori.kr')
+  assert.equal(normalizeWebOrigin(''), 'https://www.pinori.kr')
+  assert.equal(normalizeWebOrigin(undefined), 'https://www.pinori.kr')
+  assert.equal(normalizeWebOrigin('http://localhost:8081'), 'https://www.pinori.kr')
+  assert.equal(normalizeWebOrigin('javascript:alert(1)'), 'https://www.pinori.kr')
+})

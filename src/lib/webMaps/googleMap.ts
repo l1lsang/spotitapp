@@ -24,6 +24,7 @@ interface GoogleMapsNamespace {
   Map: new (container: HTMLElement, options: {
     center: LatLng; zoom: number; mapId: string; mapTypeControl: boolean; streetViewControl: boolean
     disableDefaultUI: boolean; tilt: number; heading: number
+    colorScheme?: 'LIGHT' | 'DARK' | 'FOLLOW_SYSTEM'
     gestureHandling: 'auto' | 'cooperative' | 'greedy' | 'none'
   }) => GoogleMapInstance
   LatLng: new (lat: number, lng: number) => GoogleLatLng

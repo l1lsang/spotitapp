@@ -1,3 +1,4 @@
+import { WEB_ORIGIN } from '../lib/webOrigin'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, Alert, Linking, Modal, Platform, Pressable, RefreshControl, ScrollView, Share, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { Text, TextInput } from '../components/Typography';
@@ -24,7 +25,7 @@ import type { Post } from '../types/post'
 
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : '요청을 처리하지 못했습니다. 다시 시도해 주세요.'
 const param = (value: string | string[] | undefined) => Array.isArray(value) ? value[0] || '' : value || ''
-const webUrl = (process.env.EXPO_PUBLIC_WEB_URL || 'https://www.pinori.kr').replace(/\/$/, '')
+const webUrl = WEB_ORIGIN
 const visibilityLabels = { private: '비공개', followers: '팔로워 공개', public: '전체 공개', group: '그룹 멤버 공개' }
 
 export default function PostDetailScreen() {

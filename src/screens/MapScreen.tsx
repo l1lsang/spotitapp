@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, Share, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { Animated, BackHandler, Platform, Pressable, ScrollView, Share, StyleSheet, View, useWindowDimensions, type StyleProp, type ViewStyle } from 'react-native';
 import { Text } from '../components/Typography';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import type { ImagePickerAsset } from 'expo-image-picker';
 import { CalendarDays, Compass, ExternalLink, LocateFixed, MapPin, Plus, Search, Share2, UserRound, X } from 'lucide-react-native';
 import NativeMap from '../components/NativeMap';
@@ -10,6 +10,8 @@ import { PostInteractions } from '../components/PostInteractions';
 import { FormScrollView, KeyboardPane, useKeyboardVisible } from '../components/keyboard';
 import { DirectionsButton } from '../components/DirectionsButton';
 import { MapPlacePanel } from '../components/MapPlacePanel';
+import { RemoteImage } from '../components/RemoteImage';
+import { SheetGrip, useSheetDismiss } from '../components/map/SheetGrip';
 import { useHideBottomNav } from '../components/AppChrome';
 import { MapControlButton, MapPinLegend } from '../components/map/MapControls';
 import { MapPlaceSearch, MapSelectedPlaceField } from '../components/map/MapPlaceSearch';
@@ -30,6 +32,7 @@ import { getMapScopeGroups } from '../lib/mapHelpers';
 import { readPhotoRecordPrefill, setPhotoRecordPrefill, subscribeMapRecordEvents, type MapRecordEvent, type PhotoRecordPrefill } from '../lib/photoRecordBridge';
 import { formatDateKey } from '../lib/date';
 import { subscribeGroupPosts } from '../services/postService';
+import { WEB_ORIGIN } from '../lib/webOrigin';
 import { getPostMarkerColor, type Post } from '../types/post';
 const EMPTY_POSTS: Post[] = [];
 
@@ -65,6 +68,7 @@ function ScopedMap({ groupId, lat, lng }: { groupId: string; lat?: string; lng?:
   const [groupSheetOpen, setGroupSheetOpen] = useState(false);
   const [photoSheetHeight, setPhotoSheetHeight] = useState(0);
   const [placeSheetHeight, setPlaceSheetHeight] = useState(0);
+  const [previewHeight, setPreviewHeight] = useState(0);
   const [screenHeight, setScreenHeight] = useState(0);
   const group = catalog.groups.find(item => item.id === groupId);
   const joined = !!groupId && catalog.joinedIds.includes(groupId);
@@ -126,6 +130,9 @@ function ScopedMap({ groupId, lat, lng }: { groupId: string; lat?: string; lng?:
   const myPinColors = [...new Set(shown.filter(post => post.uid === currentUser?.uid).map(post => getPostMarkerColor(post, currentUser?.uid, profile?.pinThemes)))];
   // On phones the map shrinks above a bottom sheet so its pin stays in the visible center.
   const mapBottom = wide ? 0 : photoFlow ? photoSheetHeight : placeSheetOpen ? placeSheetHeight : 0;
+  // The pin card floats over the map, so the map centers the chosen pin above it.
+  const previewOpen = (!!selectedPost || pinListOpen) && !photoFlow;
+  const mapInset = photoFlow || mapBottom ? 0 : bottom + (!wide && previewOpen ? previewHeight : 0);
   useHideBottomNav('map-sheet', !wide && (!!photoFlow || placeSheetOpen));
 
   const closePhotoRecord = useCallback(() => {
@@ -213,6 +220,31 @@ function ScopedMap({ groupId, lat, lng }: { groupId: string; lat?: string; lng?:
     if (photoFlow?.step === 'locate' && photoFlow.locateReason === 'adjust') photoRecord.returnToPhotoLocation();
     else closePhotoRecord();
   }
+  function closePreview() {
+    setSelectedPost(null); setCluster([]);
+  }
+  // Android's back button closes whatever sheet or card is open on the map, the same as
+  // swiping it down, before it leaves the screen.
+  const backAction = photoFlow ? photoBack
+    : searchOpen ? () => setSearchOpen(false)
+    : groupSheetOpen ? () => setGroupSheetOpen(false)
+    : placeSheetOpen ? () => { setSelectedLocation(null); setSelectedPlace(null); }
+    : selectedPost || pinListOpen ? closePreview
+    : recordPromptOpen ? () => setSelectedLocation(null)
+    : null;
+  const backActionRef = useRef(backAction);
+  backActionRef.current = backAction;
+  const hasBackAction = !!backAction;
+  useFocusEffect(useCallback(() => {
+    if (Platform.OS !== 'android' || !hasBackAction) return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      const action = backActionRef.current;
+      if (!action) return false;
+      action();
+      return true;
+    });
+    return () => subscription.remove();
+  }, [hasBackAction]));
 
   const statusTop = !wide && selectedPlace && !photoFlow ? top + 48 + 8 : top;
   const statusLeft = wide && selectedPlace && !photoFlow ? edge + panelWidth + 12 : edge;
@@ -222,7 +254,7 @@ function ScopedMap({ groupId, lat, lng }: { groupId: string; lat?: string; lng?:
       <NativeMap center={center} centerRevision={centerRevision} posts={shown} onSelect={selectPosts} onPick={pick}
         onRegionChange={location => { mapCenterRef.current = location; }} selected={photoFlow ? photoPinLocation : selectedLocation}
         selectedPhotoUri={photoPinLocation ? photoFlow?.items[0]?.photo.uri : undefined} selectedPostId={selectedPost?.id}
-        currentLocation={geo.location || undefined} bottomInset={photoFlow || mapBottom ? 0 : bottom} />
+        currentLocation={geo.location || undefined} bottomInset={mapInset} />
     </View>
 
     {!photoFlow && <View pointerEvents="box-none" style={[m.status, { top: statusTop, left: statusLeft, right: edge + 52 + 12 }]}>
@@ -247,9 +279,10 @@ function ScopedMap({ groupId, lat, lng }: { groupId: string; lat?: string; lng?:
       <Button title={groupId ? '이곳에 그룹 핀 남기기' : '이곳에 핀 남기기'} icon={<Plus size={18} color={p.paper} />} onPress={compose} />
     </View>}
 
-    {(!!selectedPost || pinListOpen) && !photoFlow && <View style={[m.preview, elevation.menu, { bottom, maxHeight: keyboardVisible ? '72%' : width <= 620 ? '40%' : '60%' }, wide && { left: undefined, right: 18, width: 360 }]}>
-      <FormScrollView keyboardSpaceAlreadyReserved contentContainerStyle={{ padding: 18, gap: 8 }}>
-        <View style={m.close}><SubtleButton label={selectedPost ? '닫기' : '핀 목록 닫기'} onPress={() => { setSelectedPost(null); setCluster([]); }}><X size={18} color={p.muted} /></SubtleButton></View>
+    {previewOpen && <PreviewCard sheet={!wide} onDismiss={closePreview} onHeight={setPreviewHeight}
+      style={[m.preview, elevation.menu, { bottom, maxHeight: keyboardVisible ? '72%' : width <= 620 ? '48%' : '64%' }, wide && { left: undefined, right: 18, width: 360 }]}>
+      <FormScrollView keyboardSpaceAlreadyReserved contentContainerStyle={{ padding: 18, paddingTop: wide ? 18 : 0, gap: 8 }}>
+        <View style={m.close}><SubtleButton label={selectedPost ? '닫기' : '핀 목록 닫기'} onPress={closePreview}><X size={18} color={p.muted} /></SubtleButton></View>
         {selectedPost ? <PinPreview post={selectedPost} onBack={cluster.length > 1 ? () => setSelectedPost(null) : undefined} /> : <>
           <Text accessibilityRole="header" style={m.previewTitle}>이 위치의 핀 {cluster.length}개</Text><Text style={m.small}>핀을 선택하면 정확한 위치를 볼 수 있어요.</Text>
           <View style={{ marginTop: 4 }}>{cluster.map((post, index) => <Pressable key={post.id} accessibilityRole="button" onPress={() => selectPost(post)} style={({ pressed }) => [m.listItem, index > 0 && m.listDivider, pressed && { backgroundColor: p.surface }]}>
@@ -257,7 +290,7 @@ function ScopedMap({ groupId, lat, lng }: { groupId: string; lat?: string; lng?:
           </Pressable>)}</View>
         </>}
       </FormScrollView>
-    </View>}
+    </PreviewCard>}
 
     {!!photoFlow && <>
       <PhotoRecordTopBar top={top} left={wide ? 18 : 12}
@@ -265,7 +298,7 @@ function ScopedMap({ groupId, lat, lng }: { groupId: string; lat?: string; lng?:
         step="1 / 2" backLabel={photoFlow.step === 'locate' && photoFlow.locateReason === 'adjust' ? '사진 위치 확인으로 돌아가기' : '사진으로 기록 닫기'} onBack={photoBack} />
       {photoFlow.step === 'locate' && <PhotoCenterPin bottom={mapBottom} />}
       <PhotoRecordSheet flow={photoFlow} sheet={!wide} notice={photoRecord.error} locating={geo.loading} getSearchCenter={() => mapCenterRef.current}
-        onLayout={event => { if (!wide) setPhotoSheetHeight(Math.ceil(event.nativeEvent.layout.height)); }}
+        onLayout={event => { if (!wide) setPhotoSheetHeight(Math.ceil(event.nativeEvent.layout.height)); }} onDismiss={photoBack}
         onConfirm={() => { if (photoFlow.summary?.location) openPhotoForm(photoFlow.summary.location, 'photo'); }}
         onAdjust={() => photoRecord.locate('adjust')} onReturnToPhotoLocation={photoRecord.returnToPhotoLocation}
         onPlaceHere={() => openPhotoForm(mapCenterRef.current, 'manual')}
@@ -289,19 +322,45 @@ function ScopedMap({ groupId, lat, lng }: { groupId: string; lat?: string; lng?:
     <MapPlaceSearch visible={searchOpen} initialQuery={placeQuery} center={searchCenter} onClose={() => setSearchOpen(false)} onSelect={choosePlace} />
   </KeyboardPane>;
 }
+// The pin card: on phones a grip on top lets it be swiped down to close.
+function PreviewCard({ sheet, onDismiss, onHeight, style, children }: React.PropsWithChildren<{ sheet: boolean; onDismiss: () => void; onHeight: (height: number) => void; style: StyleProp<ViewStyle> }>) {
+  const dismiss = useSheetDismiss(onDismiss);
+  return <Animated.View onLayout={event => { dismiss.onLayout(event); onHeight(Math.ceil(event.nativeEvent.layout.height)); }} style={[style, sheet && dismiss.style]}>
+    {sheet && <SheetGrip panHandlers={dismiss.panHandlers} label="핀 카드" onDismiss={onDismiss} />}
+    {children}
+  </Animated.View>;
+}
+// Every photo of the record as a square, swiped sideways when there are several.
+function SquarePhotos({ post }: { post: Post }) {
+  const [width, setWidth] = useState(0);
+  const [index, setIndex] = useState(0);
+  const photos = post.photoUrls;
+  if (!photos.length) return null;
+  return <View onLayout={event => setWidth(Math.round(event.nativeEvent.layout.width))} style={m.photos}>
+    {width > 0 && <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false} nestedScrollEnabled
+      onMomentumScrollEnd={event => setIndex(Math.round(event.nativeEvent.contentOffset.x / width))}>
+      {photos.map((uri, i) => <Pressable key={uri + i} accessibilityRole="imagebutton" accessibilityLabel={`${post.title} 사진 ${i + 1} / ${photos.length}, 상세보기`}
+        onPress={() => router.push({ pathname: '/posts/[postId]', params: { postId: post.id } })}>
+        <RemoteImage uri={uri} placeholder={post.photoThumbnailUrls?.[i] ? { uri: post.photoThumbnailUrls[i] } : undefined} contentFit="cover" transition={120} style={{ width, height: width, backgroundColor: p.surface }} />
+      </Pressable>)}
+    </ScrollView>}
+    {photos.length > 1 && <Text style={m.photoCount}>{index + 1} / {photos.length}</Text>}
+  </View>;
+}
 function SubtleButton({ label, onPress, children }: React.PropsWithChildren<{ label: string; onPress: () => void }>) {
   return <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={onPress} hitSlop={4} style={({ pressed }) => [m.subtle, pressed && { backgroundColor: p.surface }]}>{children}</Pressable>;
 }
 function PinPreview({ post, onBack }: { post: Post; onBack?: () => void }) {
   const [message, setMessage] = useState('');
   async function share() {
-    try { await Share.share({ title: post.title, message: post.placeName + ' 핀을 공유합니다.\n' + (process.env.EXPO_PUBLIC_WEB_URL || 'https://www.pinori.kr').replace(/\/$/, '') + '/posts/' + post.id }); }
+    try { await Share.share({ title: post.title, message: post.placeName + ' 핀을 공유합니다.\n' + WEB_ORIGIN + '/posts/' + post.id }); }
     catch { setMessage('공유하지 못했습니다. 다시 시도해 주세요.'); }
   }
   return <>
     {!!onBack && <Pressable accessibilityRole="button" onPress={onBack} style={{ alignSelf: 'flex-start', paddingBottom: 4 }}><Text style={{ color: p.primary, fontSize: 14 }}>← 핀 목록</Text></Pressable>}
     <Text accessibilityRole="header" style={m.previewTitle}>{post.title}</Text>
     <View style={[s.row, { gap: 7 }]}><MapPin size={15} color={p.muted} /><Text style={{ flex: 1, color: p.muted, fontSize: 15 }}>{post.placeName}</Text></View>
+    <SquarePhotos key={post.id} post={post} />
     <Text style={m.small}>{post.address || '주소가 등록되지 않은 위치입니다.'}</Text><Text style={m.small}>{post.lat.toFixed(5)}, {post.lng.toFixed(5)}</Text>
     <Pressable accessibilityRole="link" onPress={() => openLocationInMaps(post, post.placeName, setMessage)} style={[s.row, { gap: 6, alignSelf: 'flex-start', minHeight: 32 }]}><ExternalLink size={14} color={p.primary} /><Text style={m.mapLink}>지도에서 위치 열기</Text></Pressable>
     <View style={[s.row, { flexWrap: 'wrap', gap: 7, marginBottom: 6 }]}><View style={[s.row, { gap: 5 }]}><CalendarDays size={14} color={p.light} /><Text style={m.meta}>{formatDateKey(post.dateKey)}</Text></View><View style={[s.row, { gap: 5 }]}><UserRound size={14} color={p.light} /><Text style={m.meta}>{post.authorNickname}</Text></View></View>
@@ -328,4 +387,6 @@ const m = StyleSheet.create({
   mapLink: { color: p.primary, fontSize: 14.4, textDecorationLine: 'underline' },
   listItem: { paddingVertical: 14, paddingHorizontal: 4, gap: 6 }, listDivider: { borderTopWidth: 1, borderTopColor: p.line },
   listTitle: { color: p.ink, fontSize: 16, fontWeight: '600' },
+  photos: { marginVertical: 4, aspectRatio: 1, borderRadius: 6, overflow: 'hidden', backgroundColor: p.surface },
+  photoCount: { position: 'absolute', right: 8, bottom: 8, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 99, overflow: 'hidden', backgroundColor: '#161F1BA6', color: p.paper, fontSize: 12, fontWeight: '600' },
 });

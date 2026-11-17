@@ -30,6 +30,7 @@ export function createMapDriver(
     center, zoom: 15, mapId: googleMapId, mapTypeControl: false, streetViewControl: false,
     disableDefaultUI: true,
     tilt: 0, heading: 0,
+    colorScheme: 'LIGHT', // Light-only for now, whatever the system theme is.
     gestureHandling: 'greedy',
   })
   const listener = map.addListener('click', (event) => {

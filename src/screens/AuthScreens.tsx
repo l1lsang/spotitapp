@@ -192,7 +192,8 @@ export function SignupScreen() {
       const user = requireAuth().currentUser || await signupWithEmail(email, password, requirements)
       setPassword('')
       await upsertUserProfile(user)
-      const photoURL = photo ? await uploadProfilePhoto(user.uid, photo) : user.photoURL || ''
+      // The photo is optional: a failed upload finishes signup without it, to add later in the profile.
+      const photoURL = photo ? await uploadProfilePhoto(user.uid, photo).catch(() => user.photoURL || '') : user.photoURL || ''
       await updateProfile(user, { displayName: nickname.trim(), photoURL })
       await updateUserProfileDetails(user.uid, { username, nickname, bio, photoURL }, requirements)
       await refreshProfile()
@@ -228,7 +229,7 @@ export function SignupScreen() {
     </View>
     <View style={a.heading}>
       <Text accessibilityRole="header" style={a.authTitle}>{step === 'account' ? '나만의 이름으로 시작해요' : '프로필을 꾸며보세요'}</Text>
-      <Text style={a.authDescription}>{step === 'account' ? '피노리에서 나를 찾을 수 있는 고유한 이름이에요.' : '사진과 짧은 소개로 나를 표현해 보세요.'}</Text></View>
+      <Text style={a.authDescription}>{step === 'account' ? '피노리에서 나를 찾을 수 있는 고유한 이름이에요.' : '사진과 소개는 선택이에요. 나중에 프로필에서 추가해도 돼요.'}</Text></View>
     {!firebaseReady && <Notice>로그인 연결을 준비하고 있습니다. 잠시 후 다시 시도해 주세요.</Notice>}
     {step === 'account' ? <View style={a.signupFields}>
       <View style={a.fieldGroup}>
@@ -261,7 +262,7 @@ export function SignupScreen() {
           {photoUri ? <Image source={{ uri: photoUri }} accessibilityLabel="프로필 사진 미리보기" style={a.photoImage} /> : <UserRound size={42} strokeWidth={1.5} color={p.muted} />}
           <View style={a.camera}><Camera size={16} color={p.paper} /></View>
         </Pressable>
-        <Text style={{ textAlign: 'center', color: p.ink, fontWeight: '700' }}>@{username}</Text><Text style={a.hint}>사진을 눌러 추가해 보세요 · 선택 사항 · 최대 5MB</Text>
+        <Text style={{ textAlign: 'center', color: p.ink, fontWeight: '700' }}>@{username}</Text><Text style={a.hint}>프로필 사진 · 선택 사항 · 최대 5MB</Text>
         {(photo || currentUser?.photoURL) && <TextAction label="사진 편집" icon={<Crop size={14} color={p.muted} />} onPress={() => setEditingPhoto(photo || { uri: currentUser!.photoURL! })} disabled={busy} />}
         {photo && <TextAction label="선택한 사진 지우기" icon={<X size={13} color={p.muted} />} onPress={() => setPhoto(null)} disabled={busy} />}
       </View>

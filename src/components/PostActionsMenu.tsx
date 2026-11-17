@@ -1,8 +1,11 @@
 import { useRef, useState } from 'react'
 import { Modal, Platform, Pressable, StyleSheet, View, useWindowDimensions, type StyleProp, type ViewStyle } from 'react-native';
 import { Text } from './Typography';
-import { ArrowUpRight, Ban, Flag, Menu, Pencil, Share2, ShieldAlert, Trash2 } from 'lucide-react-native'
+import { router } from 'expo-router'
+import { ArrowUpRight, Ban, Flag, Menu, Pencil, Send, Share2, ShieldAlert, Trash2 } from 'lucide-react-native'
+import { useAuth } from '../hooks/useAuth'
 import { ReportDialog } from './ReportButton'
+import { PinSendSheet } from './SharePinButton'
 import { BlockUserDialog } from './BlockUserDialog'
 import type { BlockTarget } from '../services/blockService'
 import { IconButton, elevation, p } from './ui'
@@ -12,7 +15,7 @@ import type { Post } from '../types/post'
 type MenuItem = { label: string; Icon: typeof Pencil; danger?: boolean; onPress: () => void }
 type Anchor = { top: number; right: number }
 
-// Owner: edit → share → delete. Signed-in visitor: share, pin report, author report, block. Guest: share.
+// Owner: edit → send → share → delete. Signed-in visitor: send, share, pin report, author report, block. Guest: send (to login), share.
 // Lists such as the feed add onOpen (view details) and leave deletion to the detail screen.
 export function PostActionsMenu({ post, isOwner, canReport, busy, onOpen, onEdit, onShare, onDelete, triggerStyle }: {
   post: Post; isOwner: boolean; canReport: boolean; busy: boolean
@@ -25,9 +28,12 @@ export function PostActionsMenu({ post, isOwner, canReport, busy, onOpen, onEdit
   const [anchor, setAnchor] = useState<Anchor | null>(null)
   const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null)
   const [blockTarget, setBlockTarget] = useState<BlockTarget | null>(null)
+  const [sending, setSending] = useState(false)
+  const { currentUser } = useAuth()
   const items: MenuItem[] = [
     ...(onOpen ? [{ label: '자세히 보기', Icon: ArrowUpRight, onPress: onOpen }] : []),
     ...(isOwner ? [{ label: '수정', Icon: Pencil, onPress: onEdit }] : []),
+    { label: '보내기', Icon: Send, onPress: () => currentUser ? setSending(true) : router.push('/login') },
     { label: '공유', Icon: Share2, onPress: onShare },
     ...(isOwner && onDelete ? [{ label: '삭제', Icon: Trash2, danger: true, onPress: onDelete }] : []),
     ...(canReport ? [
@@ -67,6 +73,7 @@ export function PostActionsMenu({ post, isOwner, canReport, busy, onOpen, onEdit
     </Modal>
     {reportTarget && <ReportDialog target={reportTarget} onClose={() => setReportTarget(null)} />}
     {blockTarget && <BlockUserDialog target={blockTarget} onClose={() => setBlockTarget(null)} />}
+    <PinSendSheet post={post} visible={sending} onClose={() => setSending(false)} />
   </>
 }
 

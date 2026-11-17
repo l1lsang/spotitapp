@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, StyleSheet, View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
+import { Animated, Pressable, StyleSheet, View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
 import { Text, TextInput } from './Typography';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { Check, MapPin, MessageCircle, SendHorizontal, X } from 'lucide-react-native';
 import { FormScrollView } from './keyboard';
 import { Dialog } from './Dialog';
-import { MinimizedSheetRow, SheetGrip } from './map/SheetGrip';
+import { SheetGrip, useSheetDismiss } from './map/SheetGrip';
 import { Button, IconButton, Notice, elevation, p } from './ui';
 import { useAuth } from '../hooks/useAuth';
 import { formatRelativeTime } from '../lib/date';
@@ -30,8 +30,7 @@ export function MapPlacePanel({ place, groupId, canCreatePin, loginFrom, sheet, 
   const [loadError, setLoadError] = useState('');
   const [revision, setRevision] = useState(0);
   const [writing, setWriting] = useState(false);
-  const [minimized, setMinimized] = useState(false);
-  const small = sheet && minimized;
+  const dismiss = useSheetDismiss(onClose);
   const [tags, setTags] = useState<LivePlaceStatusKey[]>([]);
   const [note, setNote] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -62,16 +61,15 @@ export function MapPlacePanel({ place, groupId, canCreatePin, loginFrom, sheet, 
     finally { pending.current = false; setSubmitting(false); }
   }
 
-  return <View accessibilityLabel={place.name + ' 장소 패널'} onLayout={onLayout} style={[pp.panel, sheet ? pp.sheet : [pp.floating, elevation.dialog], style]}>
-    <FormScrollView keyboardSpaceAlreadyReserved keyboardShouldPersistTaps="handled" contentContainerStyle={[pp.content, sheet && { paddingTop: 10, paddingHorizontal: 20, paddingBottom: Math.max(24, insets.bottom) }]}>
-      {sheet && <SheetGrip minimized={minimized} onChange={setMinimized} label="장소 패널" />}
-      {small ? <MinimizedSheetRow title={place.name} detail={place.address || '주소 정보 없음'} leading={<MapPin size={18} color={p.primary} />} onExpand={() => setMinimized(false)}
-        trailing={<IconButton label="선택한 장소 닫기" disabled={submitting} onPress={onClose}><X size={20} color={p.muted} /></IconButton>} />
-      : <View style={pp.header}>
+  return <Animated.View accessibilityLabel={place.name + ' 장소 패널'} onLayout={event => { dismiss.onLayout(event); onLayout?.(event); }}
+    style={[pp.panel, sheet ? [pp.sheet, dismiss.style] : [pp.floating, elevation.dialog], style]}>
+    {sheet && <SheetGrip panHandlers={dismiss.panHandlers} label="장소 패널" onDismiss={onClose} />}
+    <FormScrollView keyboardSpaceAlreadyReserved keyboardShouldPersistTaps="handled" contentContainerStyle={[pp.content, sheet && { paddingTop: 0, paddingHorizontal: 20, paddingBottom: Math.max(24, insets.bottom) }]}>
+      <View style={pp.header}>
         <View style={{ flex: 1, minWidth: 0 }}><Text accessibilityRole="header" style={pp.title}>{place.name}</Text><Text style={pp.address}>{place.address || '주소 정보 없음'}</Text></View>
         <IconButton label="선택한 장소 닫기" disabled={submitting} onPress={onClose}><X size={20} color={p.muted} /></IconButton>
-      </View>}
-      {small ? null : currentUser ? <>
+      </View>
+      {currentUser ? <>
         <View accessibilityLabel="이 장소에서 할 일" style={pp.actions}>
           <Button title={groupId ? '그룹 핀 남기기' : '핀 남기기'} icon={<MapPin size={17} color={p.paper} />} disabled={!canCreatePin || !firebaseReady} onPress={onCreatePin} style={pp.action} />
           <Button title="리뷰 남기기" variant="secondary" icon={<MessageCircle size={17} color={p.ink} />} disabled={!firebaseReady || !profile || submitting} onPress={() => { setWriting(true); setMessage(''); setSubmitError(''); }} style={pp.action} />
@@ -124,7 +122,7 @@ export function MapPlacePanel({ place, groupId, canCreatePin, loginFrom, sheet, 
         <Button title="로그인" onPress={() => router.push({ pathname: '/login', params: { from: loginFrom } })} style={{ alignSelf: 'flex-start' }} />
       </View>}
     </FormScrollView>
-  </View>;
+  </Animated.View>;
 }
 
 const pp = StyleSheet.create({

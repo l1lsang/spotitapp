@@ -1,51 +1,53 @@
-import { useMemo, type ReactNode } from 'react';
-import { PanResponder, Pressable, StyleSheet, View } from 'react-native';
-import { ChevronUp } from 'lucide-react-native';
-import { Text } from '../Typography';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Animated, Easing, PanResponder, StyleSheet, View, type GestureResponderHandlers, type LayoutChangeEvent } from 'react-native';
 import { p } from '../ui';
 
-const SWIPE_DISTANCE = 20;
+const DISMISS_DISTANCE = 96;
+const DISMISS_VELOCITY = 0.6;
 
-// The handle on top of a map bottom sheet: tap it or swipe down to shrink the
-// sheet to one line so the map shows, tap or swipe up to bring it back.
-// `onChange` should be a state setter so the swipe handler stays stable.
-export function SheetGrip({ minimized, onChange, label }: { minimized: boolean; onChange: (minimized: boolean) => void; label: string }) {
-  const swipe = useMemo(() => PanResponder.create({
-    onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dy) > 6 && Math.abs(gesture.dy) > Math.abs(gesture.dx),
-    onPanResponderRelease: (_, gesture) => {
-      if (gesture.dy > SWIPE_DISTANCE) onChange(true);
-      else if (gesture.dy < -SWIPE_DISTANCE) onChange(false);
-    },
-  }), [onChange]);
-  return <Pressable {...swipe.panHandlers} accessibilityRole="button" accessibilityLabel={minimized ? `${label} 펼치기` : `${label} 최소화`}
-    accessibilityHint={minimized ? '위로 쓸어올려도 펼쳐져요' : '아래로 쓸어내려도 줄어들어요'} accessibilityState={{ expanded: !minimized }}
-    onPress={() => onChange(!minimized)} hitSlop={{ top: 12, bottom: 8, left: 48, right: 48 }} style={g.grip}>
-    <View style={g.bar} />
-  </Pressable>;
+// Dragging a bottom sheet's grip moves the sheet with the finger; letting go far or fast
+// enough slides it away and runs `onDismiss`, the same action as the sheet's back button.
+// A sheet that is still shown afterwards (the back action only stepped back) slides back in.
+export function useSheetDismiss(onDismiss: () => void) {
+  const [translateY] = useState(() => new Animated.Value(0));
+  // Read only while a gesture runs, never during render.
+  const live = useRef({ height: 0, mounted: true, onDismiss });
+  useEffect(() => { live.current.onDismiss = onDismiss; }, [onDismiss]);
+  useEffect(() => { const state = live.current; state.mounted = true; return () => { state.mounted = false; }; }, []);
+  const panHandlers = useMemo<GestureResponderHandlers>(() => {
+    const settle = () => Animated.spring(translateY, { toValue: 0, useNativeDriver: true, bounciness: 0, speed: 18 }).start();
+    return PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dy) > 4,
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderMove: (_, gesture) => translateY.setValue(Math.max(0, gesture.dy)),
+      onPanResponderRelease: (_, gesture) => {
+        if (gesture.dy < DISMISS_DISTANCE && !(gesture.vy > DISMISS_VELOCITY && gesture.dy > 16)) { settle(); return; }
+        Animated.timing(translateY, { toValue: Math.max(live.current.height, 320), duration: 180, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start(() => {
+          live.current.onDismiss();
+          setTimeout(() => { if (live.current.mounted) settle(); }, 220);
+        });
+      },
+      onPanResponderTerminate: settle,
+    }).panHandlers;
+  }, [translateY]);
+  return {
+    panHandlers,
+    style: { transform: [{ translateY }] },
+    onLayout: (event: LayoutChangeEvent) => { live.current.height = event.nativeEvent.layout.height; },
+  };
 }
 
-// The one line a minimized sheet keeps: what it is about, and the way back.
-export function MinimizedSheetRow({ title, detail, leading, trailing, onExpand }: {
-  title: string; detail?: string; leading?: ReactNode; trailing?: ReactNode; onExpand: () => void;
-}) {
-  return <View style={g.row}>
-    <Pressable accessibilityRole="button" accessibilityLabel={`${title} 펼치기`} onPress={onExpand} style={({ pressed }) => [g.main, pressed && { opacity: 0.6 }]}>
-      {leading}
-      <View style={{ flex: 1, minWidth: 0 }}>
-        <Text numberOfLines={1} style={g.title}>{title}</Text>
-        {!!detail && <Text numberOfLines={1} style={g.detail}>{detail}</Text>}
-      </View>
-      <ChevronUp size={18} color={p.muted} />
-    </Pressable>
-    {trailing}
+// The handle on top of a bottom sheet. Keep it outside the sheet's scroll view so the
+// scroll view never takes the drag. Screen readers get a close action instead.
+export function SheetGrip({ panHandlers, label, onDismiss }: { panHandlers: GestureResponderHandlers; label: string; onDismiss: () => void }) {
+  return <View {...panHandlers} accessible accessibilityRole="button" accessibilityLabel={`${label} 닫기`} accessibilityHint="아래로 쓸어내리면 닫혀요"
+    accessibilityActions={[{ name: 'activate' }]} onAccessibilityAction={event => { if (event.nativeEvent.actionName === 'activate') onDismiss(); }} style={g.grip}>
+    <View style={g.bar} />
   </View>;
 }
 
 const g = StyleSheet.create({
-  grip: { alignSelf: 'center', width: 72, height: 16, alignItems: 'center', justifyContent: 'center' },
+  grip: { alignSelf: 'stretch', height: 28, alignItems: 'center', justifyContent: 'center' },
   bar: { width: 40, height: 4, borderRadius: 2, backgroundColor: p.line },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  main: { flex: 1, minWidth: 0, minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 12 },
-  title: { color: p.ink, fontSize: 16, fontWeight: '600' },
-  detail: { color: p.muted, fontSize: 12.5, marginTop: 2 },
 });

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Image, Linking, Pressable, ScrollView, StyleSheet, View, useWindowDimensions, type LayoutChangeEvent } from 'react-native';
+import { ActivityIndicator, Animated, Image, Linking, Pressable, ScrollView, StyleSheet, View, useWindowDimensions, type LayoutChangeEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
@@ -15,7 +15,7 @@ import type { PhotoTakenAt } from '../../lib/photoMetadata';
 import { searchNativePlaces } from '../../lib/placeSearch';
 import { ensureMediaLocationAccess, wasMediaLocationDenied } from '../../lib/mediaLocationPermission';
 import { PHOTO_RECORD_MAX_FILES, useNearbyPlaces, type PhotoRecordFlowState } from '../../hooks/usePhotoRecordFlow';
-import { MinimizedSheetRow, SheetGrip } from './SheetGrip';
+import { SheetGrip, useSheetDismiss } from './SheetGrip';
 
 const TIP_STORAGE_KEY = 'spotit:photo-record-tip-seen';
 
@@ -88,30 +88,26 @@ export function PhotoCenterPin({ bottom }: { bottom: number }) {
   </View>;
 }
 
-export function PhotoRecordSheet({ flow, sheet, notice, locating, getSearchCenter, onLayout, onConfirm, onAdjust, onReturnToPhotoLocation, onPlaceHere, onUseCurrentLocation, onSelectPlace }: {
+export function PhotoRecordSheet({ flow, sheet, notice, locating, getSearchCenter, onLayout, onDismiss, onConfirm, onAdjust, onReturnToPhotoLocation, onPlaceHere, onUseCurrentLocation, onSelectPlace }: {
   flow: PhotoRecordFlowState; sheet: boolean; notice?: string; locating: boolean; getSearchCenter: () => LatLng;
-  onLayout?: (event: LayoutChangeEvent) => void; onConfirm: () => void; onAdjust: () => void; onReturnToPhotoLocation: () => void;
+  onLayout?: (event: LayoutChangeEvent) => void; onDismiss: () => void; onConfirm: () => void; onAdjust: () => void; onReturnToPhotoLocation: () => void;
   onPlaceHere: () => void; onUseCurrentLocation: () => void; onSelectPlace: (place: PlaceSearchResult) => void;
 }) {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
-  const [minimized, setMinimized] = useState(false);
-  const small = sheet && minimized;
-  const smallTitle = flow.step === 'reading' ? '사진 정보를 읽고 있어요' : flow.step === 'confirm' ? '사진 위치에 핀을 남길까요?' : '핀 위치를 맞춰주세요';
-  const smallDetail = flow.step === 'locate' ? '지도를 움직여 핀을 맞춘 뒤 펼쳐서 확인해 주세요' : `사진 ${flow.items.length}장`;
-  return <View accessibilityLabel="사진으로 기록" onLayout={onLayout}
-    style={[r.sheet, sheet ? r.sheetPhone : [r.sheetWide, elevation.dialog, { width: Math.min(420, width - 36) }]]}>
-    <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={[r.sheetContent, sheet && { paddingTop: 10, paddingHorizontal: 20, paddingBottom: Math.max(28, insets.bottom) }]}>
-      {sheet && <SheetGrip minimized={minimized} onChange={setMinimized} label="사진 기록" />}
-      {small && <MinimizedSheetRow title={smallTitle} detail={smallDetail} onExpand={() => setMinimized(false)}
-        leading={<Image source={{ uri: flow.items[0].photo.uri }} style={r.smallThumb} />} />}
-      {!small && !!notice && <Notice error>{notice}</Notice>}
-      {!small && flow.step === 'reading' && <ReadingContent flow={flow} />}
-      {!small && flow.step === 'confirm' && <ConfirmContent flow={flow} onAdjust={onAdjust} onConfirm={onConfirm} />}
-      {!small && flow.step === 'locate' && <LocateContent key={flow.locateReason} flow={flow} getSearchCenter={getSearchCenter} locating={locating}
+  // Swiping the sheet down works like the top bar's back button.
+  const dismiss = useSheetDismiss(onDismiss);
+  return <Animated.View accessibilityLabel="사진으로 기록" onLayout={event => { dismiss.onLayout(event); onLayout?.(event); }}
+    style={[r.sheet, sheet ? [r.sheetPhone, dismiss.style] : [r.sheetWide, elevation.dialog, { width: Math.min(420, width - 36) }]]}>
+    {sheet && <SheetGrip panHandlers={dismiss.panHandlers} label="사진 기록" onDismiss={onDismiss} />}
+    <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={[r.sheetContent, sheet && { paddingTop: 0, paddingHorizontal: 20, paddingBottom: Math.max(28, insets.bottom) }]}>
+      {!!notice && <Notice error>{notice}</Notice>}
+      {flow.step === 'reading' && <ReadingContent flow={flow} />}
+      {flow.step === 'confirm' && <ConfirmContent flow={flow} onAdjust={onAdjust} onConfirm={onConfirm} />}
+      {flow.step === 'locate' && <LocateContent key={flow.locateReason} flow={flow} getSearchCenter={getSearchCenter} locating={locating}
         onPlaceHere={onPlaceHere} onUseCurrentLocation={onUseCurrentLocation} onReturnToPhotoLocation={onReturnToPhotoLocation} onSelectPlace={onSelectPlace} />}
     </ScrollView>
-  </View>;
+  </Animated.View>;
 }
 
 function ReadingContent({ flow }: { flow: PhotoRecordFlowState }) {
@@ -281,7 +277,6 @@ const r = StyleSheet.create({
   sheetPhone: { left: 0, right: 0, bottom: 0, maxHeight: '72%', borderTopLeftRadius: 20, borderTopRightRadius: 20, boxShadow: '0 -6px 24px #161F1B29' },
   sheetWide: { left: 18, bottom: 24, maxHeight: '85%', borderRadius: 12 },
   sheetContent: { padding: 24, gap: 16 },
-  smallThumb: { width: 36, height: 36, borderRadius: 8, backgroundColor: p.surface },
   heading: { gap: 6 },
   title: { color: p.ink, fontSize: 20, lineHeight: 27, fontWeight: '700', letterSpacing: -0.5 },
   description: { color: p.muted, fontSize: 14, lineHeight: 22 },

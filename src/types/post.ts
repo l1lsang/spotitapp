@@ -60,6 +60,11 @@ export function getPostMarkerColor(post: Pick<Post, 'uid' | 'pinColor' | 'pinThe
   return currentUid && post.uid === currentUid ? getPostPinColor(post, themes) : FOLLOWING_PIN_COLOR
 }
 
+/** The small version of a record's first photo, for pins and lists; '' when it has none. */
+export function getPostCoverThumbnail(post: Pick<Post, 'photoUrls' | 'photoThumbnailUrls'>): string {
+  return post.photoThumbnailUrls?.[0] || post.photoUrls?.[0] || ''
+}
+
 export interface Post {
   id: string
   uid: string

@@ -17,3 +17,120 @@ diff --git a/node_modules/react-native-maps/android/src/main/java/com/rnmaps/map
          } else {
              // custom subview
              if (!(getChildAt(0) instanceof MapCallout)) {
+@@ -561,6 +558,14 @@ public class MapMarker extends MapFeature {
+     @Override
+     public void addToMap(Object collection) {
+         MarkerManager.Collection markerCollection = (MarkerManager.Collection) collection;
++        // A marker restored after the map was detached is added again: drop the previous
++        // Google marker first so no untracked copy stays on the map.
++        if (marker != null) {
++            MarkerManager.Collection previous = markerCollectionRef != null ? markerCollectionRef.get() : null;
++            if (previous != null) previous.remove(marker);
++            else marker.remove();
++            marker = null;
++        }
+         marker = markerCollection.addMarker(getMarkerOptions());
+         this.markerCollectionRef = new SoftReference<>(markerCollection);
+         updateTracksViewChanges();
+diff --git a/node_modules/react-native-maps/android/src/main/java/com/rnmaps/maps/MapView.java b/node_modules/react-native-maps/android/src/main/java/com/rnmaps/maps/MapView.java
+--- a/node_modules/react-native-maps/android/src/main/java/com/rnmaps/maps/MapView.java
++++ b/node_modules/react-native-maps/android/src/main/java/com/rnmaps/maps/MapView.java
+@@ -333,15 +333,16 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
+             prepareAttacherView();
+             getMapAsync((map)->{
+                 onMapReady(map);
+-                if (savedFeatures != null && !savedFeatures.isEmpty()) {
+-                    for (int i = 0; i < savedFeatures.size(); i++) {
+-                        MapFeature savedFeature = savedFeatures.get(i);
++                if (savedFeatures != null) {
++                    ArrayList<MapFeature> restored = savedFeatures;
++                    savedFeatures = null;
++                    features.clear();
++                    for (MapFeature savedFeature : restored) {
+                         if (savedFeature != null) {
+-                            addFeature(savedFeature, i);
++                            addFeature(savedFeature, features.size());
+                         }
+                     }
+                 }
+-                savedFeatures = null;
+             });
+         }
+     }
+@@ -377,7 +378,10 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
+             Log.e("MapView", "Error during stop in onDetachedFromWindow: " + e.getMessage());
+         }
+ 
+-        savedFeatures = new ArrayList<>(features);
++        // A second detach before the first restore keeps the list that is already saved.
++        if (savedFeatures == null) {
++            savedFeatures = new ArrayList<>(features);
++        }
+         features.clear();
+         shouldRestorePadding = true;
+         removeView(attacherGroup);
+@@ -1165,25 +1169,21 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
+         this.handlePanDrag = handlePanDrag;
+     }
+ 
+-    private void safeAddFeature(int index, MapFeature mapFeature){
+-        if(paused || features.size() < index){
+-            if (savedFeatures == null) {
+-                savedFeatures = new ArrayList<>();
+-            }
+-
+-            // Ensure the list is large enough to set at the given index
+-            while(savedFeatures.size() <= index){
+-                savedFeatures.add(null);
+-            }
+-            savedFeatures.set(index, mapFeature);
+-            return;
+-        }
++    // The list that mirrors the React children: the saved list while the view is detached
++    // (until it is restored), the live list otherwise.
++    private List<MapFeature> currentFeatures() {
++        return savedFeatures != null ? savedFeatures : features;
++    }
+ 
+-        // Ensure the list is large enough to set at the given index
+-        while(features.size() <= index){
+-            features.add(null);
++    // Fabric inserts children by index, so a new feature shifts the ones after it. Setting
++    // the slot instead overwrote an existing marker: it stayed on the map but could no
++    // longer be removed, leaving cluster and photo pins that never went away.
++    private void safeAddFeature(int index, MapFeature mapFeature){
++        List<MapFeature> list = currentFeatures();
++        while(list.size() < index){
++            list.add(null);
+         }
+-        features.set(index, mapFeature);
++        list.add(index, mapFeature);
+     }
+ 
+     public void addFeature(View child, int index) {
+@@ -1273,18 +1273,21 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
+     }
+ 
+     public int getFeatureCount() {
+-        return features.size();
++        return currentFeatures().size();
+     }
+ 
+     public View getFeatureAt(int index) {
+-        if (index < features.size()) {
+-            return features.get(index);
++        List<MapFeature> list = currentFeatures();
++        if (index >= 0 && index < list.size()) {
++            return list.get(index);
+         }
+         return null;
+     }
+ 
+     public void removeFeatureAt(int index) {
+-        MapFeature feature = features.remove(index);
++        List<MapFeature> list = currentFeatures();
++        if (index < 0 || index >= list.size()) return;
++        MapFeature feature = list.remove(index);
+         if (feature instanceof MapMarker) {
+             markerMap.remove(feature.getFeature());
+             feature.removeFromMap(markerCollection);

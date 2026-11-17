@@ -403,7 +403,8 @@ export function ChatRoomScreen() {
       onLayout={() => { if (atBottom.current) list.current?.scrollToOffset({ offset: 0, animated: false }) }}
       onScroll={event => { atBottom.current = event.nativeEvent.contentOffset.y < 90 }} scrollEventThrottle={100}
       onScrollToIndexFailed={info => { list.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: false }); if (retryJump.current) clearTimeout(retryJump.current); retryJump.current = setTimeout(() => list.current?.scrollToIndex({ index: info.index, animated: false, viewPosition: 0.5 }), 300) }}
-      ListEmptyComponent={!messagesLoading && !messageError ? <View style={{ transform: [{ scaleY: -1 }] }}><Text style={styles.emptyText}>아직 메시지가 없습니다.</Text></View> : null}
+      // The inverted list already flips this back (scale -1 on Android, scaleY -1 on iOS); adding our own transform would override that and mirror the text.
+      ListEmptyComponent={!messagesLoading && !messageError ? <View><Text style={styles.emptyText}>아직 메시지가 없습니다.</Text></View> : null}
       renderItem={({ item, index }) => {
         const mine = item.uid === uid
         const deleted = item.uid === 'deleted-user'

@@ -29,7 +29,7 @@ type SendSheetProps = {
   message: string | null
   link: { url: string; text: string }
   /** Error that kept the message from being prepared. */
-  prepare?: { error: string; retry: () => void }
+  prepare?: { error: string; retry?: () => void }
 }
 
 // The body mounts on every open, so each share starts with an empty selection.
@@ -38,12 +38,14 @@ export function SendSheet(props: SendSheetProps) {
 }
 
 function SendSheetBody({ visible, onClose, preview, message, link, prepare }: SendSheetProps) {
-  const { currentUser, profile, accountReady } = useAuth()
+  const { currentUser, profile } = useAuth()
   const uid = currentUser?.uid
+  // Sending needs the sender's profile (nickname), nothing more; the rules check the rest.
+  const ready = Boolean(uid && profile && profile.uid === uid)
   const insets = useSafeAreaInsets()
   const { width, height } = useWindowDimensions()
   const [chats, setChats] = useState<DaymarkChat[]>([])
-  const [loadingChats, setLoadingChats] = useState(Boolean(currentUser?.uid && accountReady))
+  const [loadingChats, setLoadingChats] = useState(ready)
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<string[]>([])
   const [note, setNote] = useState('')
@@ -56,9 +58,9 @@ function SendSheetBody({ visible, onClose, preview, message, link, prepare }: Se
   const { ids: blockedIds } = useBlockedUsers()
 
   useEffect(() => {
-    if (!uid || !accountReady) return
+    if (!uid || !ready) return
     return subscribeToMyChats(uid, next => { setChats(next); setLoadingChats(false) }, () => { setError('대화 목록을 불러오지 못했어요.'); setLoadingChats(false) })
-  }, [uid, accountReady])
+  }, [uid, ready])
 
   const targets = useMemo<Target[]>(() => {
     if (!uid) return []
@@ -108,6 +110,9 @@ function SendSheetBody({ visible, onClose, preview, message, link, prepare }: Se
   }
 
   const loading = loadingChats || people.loading
+  // Say why the send button is off instead of leaving a silent grey button.
+  const blocker = sent || busy ? '' : !ready ? '계정 정보를 불러오는 중이에요. 잠시 후 다시 시도해 주세요.'
+    : !message && !prepare?.error ? '보낼 내용을 준비하고 있어요…' : ''
   return <Modal visible={visible} transparent animationType="slide" onRequestClose={() => { if (!busy) onClose() }}>
     <KeyboardPane style={styles.pane}>
     <Pressable style={[StyleSheet.absoluteFill, styles.scrim]} accessibilityRole="button" accessibilityLabel="닫기" onPress={() => { if (!busy) onClose() }} />
@@ -131,13 +136,14 @@ function SendSheetBody({ visible, onClose, preview, message, link, prepare }: Se
         {loading && !targets.length ? <ActivityIndicator color={p.primary} style={{ width: '100%', paddingVertical: 24 }} /> : null}
         {!loading && !targets.length ? <Text style={styles.empty}>{query.trim() ? '검색 결과가 없어요.' : '대화 상대가 없어요. 사람을 팔로우하거나 검색해 보세요.'}</Text> : null}
       </ScrollView>
-      {prepare?.error ? <View style={{ gap: 8 }}><Notice error>{prepare.error}</Notice><Button title="다시 시도" variant="secondary" onPress={prepare.retry} /></View> : null}
+      {prepare?.error ? <View style={{ gap: 8 }}><Notice error>{prepare.error}</Notice>{prepare.retry ? <Button title="다시 시도" variant="secondary" onPress={prepare.retry} /> : null}</View> : null}
       {error ? <Notice error>{error}</Notice> : null}
       {notice ? <Text style={styles.empty}>{notice}</Text> : null}
       {selected.length ? <View style={styles.footer}>
         <TextInput accessibilityLabel="함께 보낼 메시지" value={note} onChangeText={setNote} editable={!busy && !sent} maxLength={1000} placeholder="메시지 쓰기…" placeholderTextColor={p.muted} style={styles.note} />
         <Button title={sent ? '보냈어요' : busy ? '보내는 중…' : selected.length > 1 ? `${selected.length}곳에 보내기` : '보내기'} loading={busy}
-          icon={sent ? <Check size={17} color={p.paper} /> : undefined} disabled={busy || sent || !message || !accountReady} onPress={() => void send()} />
+          icon={sent ? <Check size={17} color={p.paper} /> : undefined} disabled={busy || sent || !message || !ready} onPress={() => void send()} />
+        {blocker ? <Text accessibilityLiveRegion="polite" style={styles.empty}>{blocker}</Text> : null}
       </View> : <View style={styles.actions}>
         <LinkAction icon={<Link2 size={22} color={p.ink} />} label="링크 복사" onPress={() => void Clipboard.setStringAsync(link.url).then(() => setNotice('링크를 복사했어요.'), () => setNotice('복사하지 못했어요.'))} />
         <LinkAction icon={<ShareIcon size={22} color={p.ink} />} label="다른 앱으로 공유" onPress={() => void shareLink()} />

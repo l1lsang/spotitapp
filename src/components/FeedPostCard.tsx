@@ -12,8 +12,7 @@ import { openLocationInMaps } from '../lib/mapAppChoice';
 import { subscribeToLikeStatus, subscribeToPostReactions, togglePostLike } from '../services/likeService';
 import { getUserProfile } from '../services/userService';
 import type { Post } from '../types/post';
-
-const webUrl = (process.env.EXPO_PUBLIC_WEB_URL || 'https://www.pinori.kr').replace(/\/$/, '');
+import { WEB_ORIGIN as webUrl } from '../lib/webOrigin';
 const tones = { 'tone-primary': [p.primary, p.primarySoft], 'tone-olive': [p.olive, p.oliveSoft], 'tone-coral': [p.coral, p.coralSoft] } as const;
 
 // Pins keep only the author's name, so the photo comes from the (cached) profile.
