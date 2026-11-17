@@ -40,9 +40,11 @@ export function useAppChrome() {
   const authPage = ['/', '/login', '/signup'].includes(pathname);
   const chatRoom = /^\/chats\/.+/.test(pathname);
   const form = pathname === '/posts/new' || pathname === '/posts/edit';
+  // The book editor needs the whole screen for the page and its toolbar.
+  const bookEditor = /^\/books\/[^/]+\/edit$/.test(pathname);
   // The detail feed brings its own top bar on phones.
   const feedDetail = /^\/feed\/.+/.test(pathname) && width <= 860;
-  return { pathname, header: !authPage && !chatRoom && !form && !feedDetail, tabs: !authPage && !chatRoom && !form && !navHidden };
+  return { pathname, header: !authPage && !chatRoom && !form && !feedDetail && !bookEditor, tabs: !authPage && !chatRoom && !form && !bookEditor && !navHidden };
 }
 function activeTab(pathname: string, path: string) {
   if (path === '/map') return pathname === '/map' || pathname.startsWith('/groups');
