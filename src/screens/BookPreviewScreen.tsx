@@ -201,8 +201,8 @@ function IssueRow({ bookId, draft, spec, issue }: { bookId: string; draft: BookD
 }
 
 /**
- * Development builds only, until ordering exists: makes the print PDF of the saved book
- * on the server and lists what its check found beyond the app's own.
+ * Makes the print PDF of the saved book on the server and lists what its check found
+ * beyond the app's own. Ordering it comes later.
  */
 function RenderSection({ bookId, draft, spec, issues, save }: { bookId: string; draft: BookDraft; spec: BookSpec; issues: PreflightIssue[]; save: SaveState }) {
   const { last, phase, start } = useBookRender(bookId, save)
@@ -212,7 +212,7 @@ function RenderSection({ bookId, draft, spec, issues, save }: { bookId: string; 
   return <View style={styles.render}>
     <View style={styles.renderHead}>
       <FileText size={18} color={p.primary} />
-      <Text style={styles.renderTitle}>인쇄 파일 <Text style={styles.renderTag}>개발용</Text></Text>
+      <Text style={styles.renderTitle}>인쇄 파일</Text>
     </View>
     <Text style={styles.detail}>서버에 저장된 내용으로 PDF를 만들고, 실제 글꼴과 사진 파일로 한 번 더 확인해요.</Text>
     {save.kind === 'unsaved' && <Text style={styles.detail}>아직 저장되지 않은 변경이 있어요. 저장이 끝나야 만들 수 있어요.</Text>}
@@ -248,7 +248,7 @@ function CheckView({ bookId, draft, spec, issues, save, onBack }: { bookId: stri
       <Text style={styles.heading}>{heading}</Text>
       {issues.length === 0 && <Text style={styles.detail}>사진 해상도, 글 위치, 재단, 쪽 수에서 찾은 문제가 없어요.</Text>}
       {issues.map(issue => <IssueRow key={issue.id} bookId={bookId} draft={draft} spec={spec} issue={issue} />)}
-      {__DEV__ && <RenderSection bookId={bookId} draft={draft} spec={spec} issues={issues} save={save} />}
+      <RenderSection bookId={bookId} draft={draft} spec={spec} issues={issues} save={save} />
     </ScrollView>
     <View style={[styles.bottom, styles.bottomBar]}>
       <View style={{ flex: 1, gap: 2 }}>
@@ -316,7 +316,6 @@ const styles = StyleSheet.create({
   render: { gap: 8, paddingTop: 20, marginTop: 8, borderTopWidth: 1, borderColor: p.line, alignItems: 'stretch' },
   renderHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   renderTitle: { fontSize: 17, fontWeight: '700', color: p.ink },
-  renderTag: { fontSize: 13, fontWeight: '600', color: p.muted },
   renderResult: { gap: 2, paddingVertical: 4 },
   renderWorking: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   renderSub: { fontSize: 15, fontWeight: '700', color: p.ink, paddingTop: 12 },
