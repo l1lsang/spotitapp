@@ -10,6 +10,7 @@ import { BlockUserDialog } from './BlockUserDialog'
 import { useBlockedUsers, withoutBlocked } from '../hooks/useBlockedUsers'
 import type { BlockTarget } from '../services/blockService'
 import { useAuth } from '../hooks/useAuth'
+import { useKeyChange } from '../hooks/useKeyChange'
 import { formatTimestamp } from '../lib/date'
 import { getActiveMention, getMentionTokens, getMentionUsernames, insertMention, MAX_COMMENT_MENTIONS } from '../lib/commentMentions'
 import { addComment, addReply, deleteComment, deleteReply, subscribeToComments } from '../services/commentService'
@@ -29,11 +30,14 @@ export function CommentThread({ post, commentId, replyId, onJump, inputRef }: Co
   const [content, setContent] = useState('')
   const [replyingTo, setReplyingTo] = useState('')
   const [replyContent, setReplyContent] = useState('')
-  const [loading, setLoading] = useState(true)
+  const [subscribing, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [revision, setRevision] = useState(0)
+  // Signed-out viewers and an unready account load nothing.
+  const loading = !!uid && firebaseReady && subscribing
+  if (useKeyChange(`${post.id}:${uid}:${firebaseReady}:${revision}`)) { setLoading(true); setLoadError(''); setComments([]) }
   const [report, setReport] = useState<ReportTarget | null>(null)
   const [block, setBlock] = useState<BlockTarget | null>(null)
   const { ids: blockedIds } = useBlockedUsers()
@@ -49,11 +53,16 @@ export function CommentThread({ post, commentId, replyId, onJump, inputRef }: Co
   const targetExists = targetId ? visible.some(comment => targetId === `comment-${comment.id}` || comment.replies.some(reply => targetId === `reply-${reply.id}`)) : true
 
   useEffect(() => {
-    setLoading(true); setLoadError(''); setComments([])
-    if (!uid || !firebaseReady) { setLoading(false); return }
+    if (!uid || !firebaseReady) return
+    const fail = (e: unknown) => { setComments([]); setLoading(false); setLoadError(message(e)) }
     try {
-      return subscribeToComments(post.id, next => { setComments(next); setLoading(false) }, e => { setComments([]); setLoading(false); setLoadError(message(e)) })
-    } catch (e) { setLoading(false); setLoadError(message(e)) }
+      return subscribeToComments(post.id, next => { setComments(next); setLoading(false) }, fail)
+    } catch (e) {
+      // A setup failure is reported like a snapshot error, after this effect returns.
+      let active = true
+      void Promise.resolve().then(() => { if (active) fail(e) })
+      return () => { active = false }
+    }
   }, [post.id, uid, firebaseReady, revision])
   useEffect(() => {
     if (loading || loadError || !targetId || !onJump) return
@@ -195,7 +204,6 @@ export function MentionInput({ value, onChange, placeholder, disabled, autoFocus
   useEffect(() => {
     if (!open) return
     let cancelled = false
-    setSearch({ key: queryKey, users: [], loading: true, error: '' })
     const timer = setTimeout(() => {
       void searchMentionUsers(queryText).then(users => { if (!cancelled) setSearch({ key: queryKey, users, loading: false, error: '' }) }).catch(() => { if (!cancelled) setSearch({ key: queryKey, users: [], loading: false, error: '사용자 검색을 불러오지 못했습니다. 잠시 후 다시 입력해 주세요.' }) })
     }, 200)

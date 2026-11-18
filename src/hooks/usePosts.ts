@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFocusEffect } from "expo-router";
 import { useAuth } from "./useAuth";
 import { useBlockedUsers, withoutBlocked } from "./useBlockedUsers";
+import { useKeyChange } from "./useKeyChange";
 import {
   getProfilePosts,
   getUserPosts,
@@ -107,15 +108,13 @@ export function usePosts(
       };
     }, [refresh, kind]),
   );
-  useEffect(() => {
-    if (kind !== "liked") return;
+  if (useKeyChange(`${kind}:${uid}:${firebaseReady}:${likesRevision}`) && kind === "liked") {
     setPosts([]);
     setError("");
-    if (!uid || !firebaseReady) {
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
+    setLoading(!!uid && firebaseReady);
+  }
+  useEffect(() => {
+    if (kind !== "liked" || !uid || !firebaseReady) return;
     return subscribeToLikedPosts(
       uid,
       (list) => {

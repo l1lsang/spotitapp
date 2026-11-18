@@ -14,6 +14,7 @@ import type { DaymarkUser } from '../types/user'
 import { AuthContext } from './authContextCore'
 import { invalidateAppReads } from '../lib/readCache'
 import { clearRemoteImageCache } from '../components/RemoteImage'
+import { clearBookDrafts } from '../services/bookDraftStorage'
 
 export function AuthProvider({ children }: PropsWithChildren): ReactElement {
   const [currentUser, setCurrentUser] = useState<User | null>(null)
@@ -48,7 +49,11 @@ export function AuthProvider({ children }: PropsWithChildren): ReactElement {
     const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       invalidateAppReads()
       // Restoring the same session at launch keeps the photo cache; a sign-out or account switch clears it.
-      if (previousUid && previousUid !== user?.uid) void clearRemoteImageCache()
+      if (previousUid && previousUid !== user?.uid) {
+        void clearRemoteImageCache()
+        // Book drafts on this device belong to the account that left.
+        void clearBookDrafts().catch(() => undefined)
+      }
       previousUid = user?.uid ?? null
       const currentRevision = ++revision
       setProfile(null)

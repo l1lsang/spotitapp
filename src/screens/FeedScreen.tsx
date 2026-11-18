@@ -31,7 +31,8 @@ export default function FeedScreen() {
   const contentWidth = Math.min(width, 935);
   const tile = (contentWidth - gap * 2) / 3;
   const viewerUid = currentUser?.uid;
-  useEffect(() => { void geo.requestLocation(false); }, [geo.requestLocation]);
+  const requestLocation = geo.requestLocation;
+  useEffect(() => { void requestLocation(false); }, [requestLocation]);
   const searching = !!search.trim();
   // The server search reaches every pin, so loading earlier pages adds no match.
   const searchedAll = searching && !found.error;

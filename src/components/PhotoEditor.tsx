@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, Image, Modal, PanResponder, Pressable, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Text } from './Typography';
 import { Check, FlipHorizontal2, Minus, Plus, RotateCcw, RotateCw, Undo2, X } from 'lucide-react-native'
 import { FlipType, ImageManipulator, SaveFormat } from 'expo-image-manipulator'
 import type { UploadPhoto } from '../services/storageService'
+import { useKeyChange } from '../hooks/useKeyChange'
 import { Button, IconButton, Notice, QuietSurface, p } from './ui'
 
 interface PhotoEditorProps {
@@ -34,9 +35,9 @@ function Editor({ photo: input, onClose, onSave, square = false }: PhotoEditorPr
   const [revision, setRevision] = useState(0)
   const actionLock = useRef(false)
 
+  if (useKeyChange(`${input.uri}:${input.name}:${revision}`)) { setBusy(true); setError('') }
   useEffect(() => {
     let active = true
-    setBusy(true); setError('')
     // Decode once into a local still image. This also freezes animated sources,
     // so the crop preview and the saved frame refer to the same pixels.
     const load = async () => {
@@ -64,9 +65,11 @@ function Editor({ photo: input, onClose, onSave, square = false }: PhotoEditorPr
   const maxPanX = Math.max(0, (imageWidth - frameWidth) / 2)
   const maxPanY = Math.max(0, (imageHeight - frameHeight) / 2)
   const latest = useRef({ busy, maxPanX, maxPanY, pan })
-  latest.current = { busy, maxPanX, maxPanY, pan }
+  useEffect(() => { latest.current = { busy, maxPanX, maxPanY, pan } }, [busy, maxPanX, maxPanY, pan])
   const dragStart = useRef(pan)
-  const responder = useMemo(() => PanResponder.create({
+  // The handlers read refs only while a drag runs; PanResponder.create does not call them.
+  // eslint-disable-next-line react-hooks/refs
+  const [responder] = useState(() => PanResponder.create({
     onStartShouldSetPanResponder: () => !latest.current.busy,
     onMoveShouldSetPanResponder: () => !latest.current.busy,
     onPanResponderGrant: () => { dragStart.current = latest.current.pan },
@@ -77,7 +80,7 @@ function Editor({ photo: input, onClose, onSave, square = false }: PhotoEditorPr
         y: state.maxPanY ? clamp(dragStart.current.y + gesture.dy / state.maxPanY, -1, 1) : 0 })
     },
     onPanResponderTerminationRequest: () => false,
-  }), [])
+  }))
 
   function close() { if (!actionLock.current) onClose() }
   function move(x: number, y: number) { setPan(previous => ({ x: clamp(previous.x + x, -1, 1), y: clamp(previous.y + y, -1, 1) })) }
@@ -106,22 +109,33 @@ function Editor({ photo: input, onClose, onSave, square = false }: PhotoEditorPr
       const originY = Math.round(clamp((photo.height - height) / 2 * (1 - pan.y), 0, photo.height - height))
       const context = ImageManipulator.manipulate(photo.uri)
       context.crop({ originX, originY, width, height })
-      const maxDimension = square ? 768 : 2048
-      if (Math.max(width, height) > maxDimension) context.resize(width > height ? { width: maxDimension } : { height: maxDimension })
+      // Profile photos are small squares (uploaded at 384px). Other photos stay full size
+      // and lossless, so the upload encodes each stored copy once from this file.
+      if (square && width > 768) context.resize({ width: 768 })
       const rendered = await context.renderAsync()
-      const result = await rendered.saveAsync({ format: SaveFormat.JPEG, compress: 0.94 })
-      onSave({ ...result, name: 'edited-photo.jpg', mimeType: 'image/jpeg' })
+      if (square) {
+        const result = await rendered.saveAsync({ format: SaveFormat.JPEG, compress: 0.94 })
+        onSave({ ...result, name: 'edited-photo.jpg', mimeType: 'image/jpeg' })
+      } else {
+        const result = await rendered.saveAsync({ format: SaveFormat.PNG })
+        onSave({ ...result, name: 'edited-photo.png', mimeType: 'image/png' })
+      }
     } catch { setError('사진을 편집하지 못했습니다. 다른 사진을 선택하거나 다시 시도해 주세요.') }
     finally { actionLock.current = false; setBusy(false) }
   }
 
   const controlsDisabled = busy || !photo
+  function reset() { setPhoto(original); setZoom(1); setPan({ x: 0, y: 0 }); setAspect(square ? '1' : 'original'); setError('') }
+  function runTool(action: 'left' | 'right' | 'flip' | 'reset') {
+    if (action === 'reset') reset()
+    else void transform(action)
+  }
   const tools = [
-    { label: '왼쪽 회전', Icon: RotateCcw, onPress: () => transform('left') },
-    { label: '오른쪽 회전', Icon: RotateCw, onPress: () => transform('right') },
-    { label: '좌우 반전', Icon: FlipHorizontal2, onPress: () => transform('flip') },
-    { label: '초기화', Icon: Undo2, onPress: () => { setPhoto(original); setZoom(1); setPan({ x: 0, y: 0 }); setAspect(square ? '1' : 'original'); setError('') } },
-  ]
+    { label: '왼쪽 회전', Icon: RotateCcw, action: 'left' },
+    { label: '오른쪽 회전', Icon: RotateCw, action: 'right' },
+    { label: '좌우 반전', Icon: FlipHorizontal2, action: 'flip' },
+    { label: '초기화', Icon: Undo2, action: 'reset' },
+  ] as const
   const toolBasis = { flexBasis: width <= 480 ? '45%' : '20%', flexGrow: 1 } as const
   return <Modal visible animationType="slide" presentationStyle="fullScreen" onRequestClose={close}>
     <QuietSurface.Provider value={false}><SafeAreaView style={styles.page}>
@@ -162,7 +176,7 @@ function Editor({ photo: input, onClose, onSave, square = false }: PhotoEditorPr
               <Pressable accessibilityRole="button" accessibilityLabel="확대" disabled={controlsDisabled || zoom >= 4} onPress={() => setZoom(value => Math.min(4, value + 0.1))} style={({ pressed }) => [styles.tool, { flex: 1 }, pressed && styles.toolPressed, (controlsDisabled || zoom >= 4) && styles.disabled]}><Plus color={p.ink} size={17} /><Text style={styles.toolText}>확대</Text></Pressable>
             </View>
           </View>
-          <View style={styles.tools}>{tools.map(({ label, Icon, onPress }) => <Pressable key={label} accessibilityRole="button" disabled={controlsDisabled} onPress={onPress}
+          <View style={styles.tools}>{tools.map(({ label, Icon, action }) => <Pressable key={label} accessibilityRole="button" disabled={controlsDisabled} onPress={() => runTool(action)}
             style={({ pressed }) => [styles.tool, toolBasis, pressed && styles.toolPressed, controlsDisabled && styles.disabled]}><Icon size={17} color={p.ink} /><Text style={styles.toolText}>{label}</Text></Pressable>)}</View>
           <View style={styles.tools}>{[{ label: '←', hint: '사진을 왼쪽으로 이동', x: -0.1, y: 0 }, { label: '→', hint: '사진을 오른쪽으로 이동', x: 0.1, y: 0 }, { label: '↑', hint: '사진을 위로 이동', x: 0, y: -0.1 }, { label: '↓', hint: '사진을 아래로 이동', x: 0, y: 0.1 }].map(item => <Pressable key={item.label} accessibilityRole="button" accessibilityLabel={item.hint} disabled={controlsDisabled} onPress={() => move(item.x, item.y)}
             style={({ pressed }) => [styles.tool, { flex: 1 }, pressed && styles.toolPressed, controlsDisabled && styles.disabled]}><Text style={styles.toolText}>{item.label}</Text></Pressable>)}</View>

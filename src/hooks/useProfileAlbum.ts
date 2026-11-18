@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useBlockedUsers, withoutBlocked } from './useBlockedUsers'
+import { useKeyChange } from './useKeyChange'
 import { getProfilePosts, subscribeToLikedPosts } from '../services/postService'
 import type { Post } from '../types/post'
 
@@ -19,11 +20,9 @@ export function useProfileAlbum(ownerUid: string, viewerUid: string | undefined,
   const [error, setError] = useState('')
   const [revision, setRevision] = useState(0)
 
+  if (useKeyChange(`${ownerUid}:${viewerUid}:${refreshKey}:${revision}`)) { setLoading(true); setAlbum(null); setError('') }
   useEffect(() => {
     let active = true
-    setLoading(true)
-    setAlbum(null)
-    setError('')
     void getProfilePosts(ownerUid, viewerUid).then(result => {
       if (active) setAlbum(result)
     }).catch(error => {
@@ -45,14 +44,15 @@ export interface LikedPostsState {
 // Subscribes only while the likes tab is open.
 export function useLikedPosts(uid: string | undefined, enabled: boolean): LikedPostsState {
   const [posts, setPosts] = useState<Post[]>([])
-  const [loading, setLoading] = useState(true)
+  const [subscribing, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [revision, setRevision] = useState(0)
+  // Signed-out viewers have no likes to load.
+  const loading = enabled && !uid ? false : subscribing
+  if (useKeyChange(`${uid}:${enabled}:${revision}`) && enabled) { setPosts([]); setLoading(true); setError('') }
 
   useEffect(() => {
-    if (!enabled) return
-    setPosts([]); setLoading(true); setError('')
-    if (!uid) { setLoading(false); return }
+    if (!enabled || !uid) return
     return subscribeToLikedPosts(uid, next => { setPosts(next); setLoading(false) }, () => {
       setPosts([]); setLoading(false); setError('좋아요한 핀을 불러오지 못했어요. 다시 시도해 주세요.')
     })

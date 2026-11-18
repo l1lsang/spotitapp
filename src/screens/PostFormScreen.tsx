@@ -52,7 +52,7 @@ import {
   type PostFormInput,
 } from "../types/post";
 import type { PinGroup } from "../types/group";
-import type { UploadPhoto } from "../services/storageService";
+import { bestEditSource, type UploadPhoto } from "../services/storageService";
 const PLACE_NAME_MAX_LENGTH = 50;
 export default function PostFormScreen() {
   const params = useLocalSearchParams<{
@@ -91,6 +91,8 @@ export default function PostFormScreen() {
   const [error, setError] = useState("");
   const [editing, setEditing] = useState<number | null>(null);
   const [editingExisting, setEditingExisting] = useState<string | null>(null);
+  // Where the photo being re-edited is read from: its print copy when it has one.
+  const [editingSource, setEditingSource] = useState<{ display: string; uri: string } | null>(null);
   const saveLock = useRef(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -103,14 +105,15 @@ export default function PostFormScreen() {
   // The bridge only carries the photos to this screen; a later visit starts clean.
   useEffect(() => () => { if (photoPrefill) setPhotoRecordPrefill(null); }, [photoPrefill]);
   // The nearest place fills empty fields once; anything the user typed stays.
-  useEffect(() => {
-    if (!nearestPlace) return;
+  const [suggestedPlace, setSuggestedPlace] = useState<typeof nearestPlace | undefined>(undefined);
+  if (nearestPlace && nearestPlace !== suggestedPlace) {
+    setSuggestedPlace(nearestPlace);
     setForm((previous) => previous.placeName || previous.address ? previous : {
       ...previous,
       placeName: nearestPlace.name.slice(0, PLACE_NAME_MAX_LENGTH),
       address: nearestPlace.address,
     });
-  }, [nearestPlace]);
+  }
   useEffect(() => {
     let active = true;
     if (!params.postId || !currentUser) return;
@@ -329,7 +332,7 @@ export default function PostFormScreen() {
         {existing.map(uri => <View key={uri} style={{ width: tile, height: tile }}>
           <Pressable accessibilityLabel="등록된 사진 편집" disabled={saving} onPress={() => setEditingExisting(uri)}><RemoteImage uri={uri} accessibilityLabel="등록된 장소 사진" style={[f.previewImage, { width: tile, height: tile }]} /></Pressable>
           <Pressable accessibilityRole="button" accessibilityLabel="사진 제거" disabled={saving} onPress={() => setExisting(old => old.filter(item => item !== uri))} hitSlop={8} style={f.previewRemove}><X size={16} color={p.paper} /></Pressable>
-          <Pressable accessibilityRole="button" accessibilityLabel="등록된 사진 편집" disabled={saving} onPress={() => setEditingExisting(uri)} style={f.previewEdit}><Crop size={14} color={p.paper} /><Text style={f.previewEditText}>편집</Text></Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="등록된 사진 편집" disabled={saving} onPress={() => { setEditingExisting(uri); setEditingSource(null); void bestEditSource(uri).then(source => setEditingSource({ display: uri, uri: source })); }} style={f.previewEdit}><Crop size={14} color={p.paper} /><Text style={f.previewEditText}>편집</Text></Pressable>
         </View>)}
         {photos.map((photo, index) => <View key={photo.uri} style={{ width: tile, height: tile }}>
           <Pressable accessibilityLabel="사진 편집" disabled={saving} onPress={() => setEditing(index)}><Image source={{ uri: photo.uri }} accessibilityLabel={photo.name || "선택한 사진"} style={[f.previewImage, { width: tile, height: tile }]} /></Pressable>
@@ -438,13 +441,14 @@ export default function PostFormScreen() {
         <Text style={f.hint}>가입한 그룹을 선택하면 멤버들과 핀을 함께 모을 수 있어요.</Text>
       </Dialog>
       <PhotoEditor
-        photo={editingExisting ? {uri: editingExisting} : editing !== null ? photos[editing] || null : null}
-        onClose={() => {setEditing(null);setEditingExisting(null);}}
+        photo={editingExisting ? (editingSource?.display === editingExisting ? {uri: editingSource.uri} : null) : editing !== null ? photos[editing] || null : null}
+        onClose={() => {setEditing(null);setEditingExisting(null);setEditingSource(null);}}
         onSave={(photo) => {
           if(editingExisting){setExisting(old=>old.filter(uri=>uri!==editingExisting));setPhotos(old=>[...old,photo]);}
           else setPhotos((old) => old.map((item, index) => (index === editing ? photo : item)));
           setEditing(null);
           setEditingExisting(null);
+          setEditingSource(null);
         }}
       />
       <Modal

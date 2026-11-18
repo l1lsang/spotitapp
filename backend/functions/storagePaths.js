@@ -15,13 +15,22 @@ function photoPaths(post, bucket) {
   return urls.map(url => storagePathFromUrl(url, bucket)).filter(Boolean)
 }
 
+/** A record photo's private print copy shares its file name (src/lib/photoPrint.ts). */
+function printPathFor(displayPath) {
+  const match = /^(posts\/[^/]+\/[^/]+)\/([^/]+)$/.exec(displayPath)
+  return match ? `${match[1]}/print/${match[2]}` : ''
+}
+
 // Photo URLs are written by clients, so only files inside the pin's own folder are
 // eligible: a URL copied from someone else's pin can never get their file deleted.
+// A removed photo takes its print copy with it.
 function removedPostPhotoPaths(before, after, postId, bucket) {
   if (typeof before?.uid !== 'string' || !before.uid || before.uid.includes('/')) return []
   const folder = `posts/${before.uid}/${postId}/`
   const kept = new Set(photoPaths(after, bucket))
-  return [...new Set(photoPaths(before, bucket))].filter(path => path.startsWith(folder) && !kept.has(path))
+  const removed = [...new Set(photoPaths(before, bucket))].filter(path => path.startsWith(folder) && !kept.has(path))
+  const prints = removed.map(printPathFor).filter(path => path && !kept.has(path))
+  return [...removed, ...prints]
 }
 
-module.exports = { storagePathFromUrl, removedPostPhotoPaths }
+module.exports = { storagePathFromUrl, removedPostPhotoPaths, printPathFor }

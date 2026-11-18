@@ -1,5 +1,6 @@
 const { test, after } = require('node:test')
 const assert = require('node:assert/strict')
+const { Buffer } = require('node:buffer')
 const { randomUUID } = require('node:crypto')
 const admin = require('firebase-admin')
 const { kakaoCustomToken } = require('./kakaoAuthCore')

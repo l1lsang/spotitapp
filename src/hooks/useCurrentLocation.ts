@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Platform } from "react-native";
 import * as Location from "expo-location";
 import { useAuth } from "./useAuth";
+import { useKeyChange } from "./useKeyChange";
 import {
   hasLocationConsent,
   saveLocationConsent,
@@ -43,12 +44,16 @@ export function useCurrentLocation() {
   const [error, setError] = useState("");
   const revision = useRef(0);
   const uid = currentUser?.uid;
-  useEffect(() => {
-    revision.current++;
+  // Another account never sees the previous account's location or pending request.
+  if (useKeyChange(String(uid))) {
     setLocation(null);
     setError("");
     setLoading(false);
-    return () => { revision.current++; };
+  }
+  useEffect(() => {
+    const requests = revision;
+    requests.current++;
+    return () => { requests.current++; };
   }, [uid]);
   const requestLocation = useCallback(async (interactive = true): Promise<LatLng | null> => {
     if (!uid) {
