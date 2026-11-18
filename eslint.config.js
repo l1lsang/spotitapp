@@ -13,6 +13,8 @@ module.exports = defineConfig([
       ".expo/**",
       ".verification.local/**",
       "backend/functions/node_modules/**",
+      // Throwaway experiments with their own dependencies (see each spike's README).
+      "spikes/**",
     ],
   }
 ]);

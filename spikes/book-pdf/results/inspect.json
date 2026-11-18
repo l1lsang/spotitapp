@@ -1,0 +1,200 @@
+{
+  "pdflib-char": {
+    "pages": 200,
+    "boxes": {
+      "media": [
+        0.0,
+        0.0,
+        154.0,
+        216.0
+      ],
+      "trim": [
+        3.0,
+        3.0,
+        151.0,
+        213.0
+      ],
+      "bleed": [
+        0.0,
+        0.0,
+        154.0,
+        216.0
+      ]
+    },
+    "fonts": {
+      "GowunBatang-Regular-6679": {
+        "type": "Type0",
+        "embedded": true,
+        "subset": false
+      },
+      "Pretendard-Regular-9497": {
+        "type": "Type0",
+        "embedded": true,
+        "subset": false
+      },
+      "NanumPen-Regular-8787": {
+        "type": "Type0",
+        "embedded": true,
+        "subset": false
+      }
+    },
+    "textElementsFound": 300,
+    "textElementsMissing": 1
+  },
+  "chromium-char": {
+    "pages": 200,
+    "boxes": {
+      "media": [
+        0.0,
+        0.0,
+        154.18,
+        215.9
+      ],
+      "trim": [
+        3.0,
+        2.9,
+        151.0,
+        212.9
+      ],
+      "bleed": [
+        0.0,
+        0.0,
+        154.18,
+        215.9
+      ]
+    },
+    "fonts": {
+      "AAAAAA+GowunBatang-Regular": {
+        "type": "Type0",
+        "embedded": true,
+        "subset": true
+      },
+      "": {
+        "type": "Type3",
+        "embedded": false,
+        "subset": false
+      },
+      "CAAAAA+NanumPen-Regular": {
+        "type": "Type0",
+        "embedded": true,
+        "subset": true
+      }
+    },
+    "textElementsFound": 301,
+    "textElementsMissing": 0
+  },
+  "pdflib-keep-all": {
+    "pages": 200,
+    "boxes": {
+      "media": [
+        0.0,
+        0.0,
+        154.0,
+        216.0
+      ],
+      "trim": [
+        3.0,
+        3.0,
+        151.0,
+        213.0
+      ],
+      "bleed": [
+        0.0,
+        0.0,
+        154.0,
+        216.0
+      ]
+    },
+    "fonts": {
+      "GowunBatang-Regular-6679": {
+        "type": "Type0",
+        "embedded": true,
+        "subset": false
+      },
+      "Pretendard-Regular-9497": {
+        "type": "Type0",
+        "embedded": true,
+        "subset": false
+      },
+      "NanumPen-Regular-8787": {
+        "type": "Type0",
+        "embedded": true,
+        "subset": false
+      }
+    },
+    "textElementsFound": 300,
+    "textElementsMissing": 1
+  },
+  "chromium-keep-all": {
+    "pages": 200,
+    "boxes": {
+      "media": [
+        0.0,
+        0.0,
+        154.18,
+        215.9
+      ],
+      "trim": [
+        3.0,
+        2.9,
+        151.0,
+        212.9
+      ],
+      "bleed": [
+        0.0,
+        0.0,
+        154.18,
+        215.9
+      ]
+    },
+    "fonts": {
+      "AAAAAA+GowunBatang-Regular": {
+        "type": "Type0",
+        "embedded": true,
+        "subset": true
+      },
+      "": {
+        "type": "Type3",
+        "embedded": false,
+        "subset": false
+      },
+      "CAAAAA+NanumPen-Regular": {
+        "type": "Type0",
+        "embedded": true,
+        "subset": true
+      }
+    },
+    "textElementsFound": 301,
+    "textElementsMissing": 0
+  },
+  "lines-char": {
+    "pagesSame": 199,
+    "pagesDifferent": 1,
+    "examples": [
+      {
+        "page": 5,
+        "onlyPdflib": [
+          "손글씨 \u0000 가운데 정렬"
+        ],
+        "onlyChromium": [
+          "손글씨 · 가운데 정렬"
+        ]
+      }
+    ]
+  },
+  "lines-keep-all": {
+    "pagesSame": 199,
+    "pagesDifferent": 1,
+    "examples": [
+      {
+        "page": 5,
+        "onlyPdflib": [
+          "손글씨 \u0000 가운데 정렬"
+        ],
+        "onlyChromium": [
+          "손글씨 · 가운데 정렬"
+        ]
+      }
+    ]
+  }
+}
