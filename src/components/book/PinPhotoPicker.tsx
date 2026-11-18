@@ -1,18 +1,15 @@
 import { useEffect, useState } from 'react'
-import { ActivityIndicator, Image, Pressable, StyleSheet, View } from 'react-native'
+import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native'
 import { Text } from '../Typography'
 import { Dialog } from '../Dialog'
 import { RemoteImage } from '../RemoteImage'
 import { Button, Notice, p } from '../ui'
 import { getUserPosts } from '../../services/postService'
+import { measurePhoto } from '../../services/bookPhotoService'
 import type { Post } from '../../types/post'
 import type { BookImageRef } from '../../types/book'
 
 const THUMB = 76
-
-function measure(url: string): Promise<{ width: number; height: number }> {
-  return new Promise((resolve, reject) => Image.getSize(url, (width, height) => resolve({ width, height }), reject))
-}
 
 /** Photos from the signed-in user's own records only. */
 export function PinPhotoPicker({ uid, visible, onClose, onPick }: {
@@ -40,7 +37,7 @@ export function PinPhotoPicker({ uid, visible, onClose, onPick }: {
     const key = `${post.id}:${index}`
     if (picking) return
     setPicking(key)
-    measure(url)
+    measurePhoto(url)
       .then(size => {
         onPick({ postId: post.id, photoIndex: index, url, thumbUrl: post.photoThumbnailUrls?.[index], pxWidth: size.width, pxHeight: size.height })
         onClose()

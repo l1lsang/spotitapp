@@ -64,12 +64,34 @@ export interface BookPage {
   elements: BookElement[]
 }
 
+export type BookCoverStyle = 'photo' | 'minimal' | 'kraft'
+
 export interface BookDraft {
   schemaVersion: number
   id: string
   title: string
+  /** Printed on the first page, under the title. */
+  subtitle: string
   specId: BookSpecId
+  coverStyle: BookCoverStyle
+  /** The cover photo for the 'photo' style; also the book's picture in lists. */
+  coverPhoto: BookImageRef | null
+  /** The records the book was made from, in the order the user chose. */
+  sourcePostIds: string[]
   pages: BookPage[]
   /** ISO time of the last edit. */
   updatedAt: string
+}
+
+/** One row of "내 책": what a list needs without reading the pages. */
+export interface BookSummary {
+  id: string
+  title: string
+  specId: BookSpecId
+  coverStyle: BookCoverStyle
+  coverPhoto: BookImageRef | null
+  pageCount: number
+  recordCount: number
+  /** Milliseconds since the epoch; 0 while the server time is not known yet. */
+  updatedAtMs: number
 }

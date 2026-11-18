@@ -60,9 +60,9 @@ export default function MyPostsScreen() {
       <IconButton label="뒤로 가기" onPress={() => router.canGoBack() ? router.back() : router.replace('/profile')} style={{ marginLeft: -10 }}><ChevronLeft size={22} color={p.ink} /></IconButton>
       <Text accessibilityRole="header" style={m.title}>내 기록</Text>
       {!loading && !error && <Text style={m.count}>기록 {posts.length}개</Text>}
-      {/* Book Studio milestone 1: reachable only in development builds until it is finished. */}
-      {__DEV__ && <Pressable accessibilityRole="link" onPress={() => router.push({ pathname: '/books/[bookId]/edit', params: { bookId: 'local' } })} style={m.devLink}>
-        <Text style={m.devLinkText}>책 편집기 (개발용)</Text>
+      {/* Book Studio: development builds only until the books security rules are deployed. */}
+      {__DEV__ && <Pressable accessibilityRole="link" onPress={() => router.push('/books')} style={m.devLink}>
+        <Text style={m.devLinkText}>내 책 (개발용)</Text>
       </Pressable>}
     </View>
 
