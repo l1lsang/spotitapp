@@ -153,7 +153,10 @@ function PersonProfile({ userId, from, tab: requestedTab }: { userId: string; fr
         {!!user.isPrivate && <View style={v.profilePrivacy}><Lock size={14} color={p.muted} style={{ marginTop: 2 }} /><Text style={v.privacyText}>{own ? '비공개 계정 · 새 팔로우 요청은 설정에서 승인할 수 있습니다.' : '비공개 계정 · 팔로우 요청을 승인받아야 합니다.'}</Text></View>}
       </View>
       <View style={v.actions}>
-        {own ? <Button title="프로필 편집" variant="secondary" style={v.action} onPress={() => router.push('/profile/settings')} /> : blocked ? <Button title={action === 'unblock' ? '해제 중…' : '차단 해제'} variant="secondary" style={v.action} icon={<Ban size={17} color={p.ink} />} disabled={!!action} onPress={() => void unblock()} /> : <>
+        {own ? <>
+          <Button title="프로필 편집" variant="secondary" style={v.action} onPress={() => router.push('/profile/settings')} />
+          <Button title="내 책" variant="secondary" style={v.action} onPress={() => router.push('/books')} />
+        </> : blocked ? <Button title={action === 'unblock' ? '해제 중…' : '차단 해제'} variant="secondary" style={v.action} icon={<Ban size={17} color={p.ink} />} disabled={!!action} onPress={() => void unblock()} /> : <>
           <Button title={action === 'follow' ? '처리 중…' : followed ? '팔로잉' : requested ? '요청 취소' : user.isPrivate ? '팔로우 요청' : '팔로우'} style={v.action}
             icon={<FollowIcon size={17} color={followed || requested ? p.ink : p.paper} />}
             variant={followed || requested ? 'secondary' : 'primary'} disabled={!!action || loading || !!loadError || !profile} onPress={follow} />
