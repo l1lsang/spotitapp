@@ -26,7 +26,8 @@ const SEVERITY: Record<IssueSeverity, { label: string; color: string }> = {
 }
 const SHORT: Record<PreflightIssue['kind'], string> = {
   'page-count': '쪽 수', 'photo-resolution': '사진 해상도', 'text-outside-safe': '글 잘림',
-  'photo-bleed-gap': '사진 가장자리', 'photo-full-bleed': '재단', font: '글꼴', 'empty-page': '빈 쪽',
+  'photo-bleed-gap': '사진 가장자리', 'photo-full-bleed': '재단', font: '글꼴',
+  'glyph-fallback': '대체 글자', 'glyph-missing': '빠진 글자', 'empty-page': '빈 쪽',
 }
 const BLOCKED_TEXT = {
   deleted: '이 책은 삭제됐어요.',
