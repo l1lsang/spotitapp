@@ -50,3 +50,6 @@ artifacts/*.aab
 artifacts/*.ipa
 *-debug.log
 .env
+
+# Book PDF spike: generated photos and PDFs (spikes/book-pdf/README.md regenerates them)
+spikes/book-pdf/out/
