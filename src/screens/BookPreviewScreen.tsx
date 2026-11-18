@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { ActivityIndicator, BackHandler, Pressable, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { router } from 'expo-router'
-import { AlertTriangle, ChevronLeft, ChevronRight, Eye, SquareDashed, XCircle } from 'lucide-react-native'
+import { AlertTriangle, ChevronLeft, ChevronRight, Eye, FileText, SquareDashed, XCircle } from 'lucide-react-native'
 import { Text } from '../components/Typography'
 import { Button, IconButton, Notice, p } from '../components/ui'
 import { BookCover, COVER_STYLES } from '../components/book/BookCover'
@@ -12,10 +12,12 @@ import { StaticElementView } from '../components/book/BookElementView'
 import { useBookFonts } from '../components/book/bookFonts'
 import { useAuth } from '../hooks/useAuth'
 import { useBookPreview } from '../hooks/useBookPreview'
+import { useBookRender } from '../hooks/useBookRender'
 import { requestBookFocus } from '../lib/book/focus'
 import { countBySeverity, flaggedPages, orderReadiness, preflightBook, type IssueSeverity, type PreflightIssue } from '../lib/book/preflight'
 import { getBookSpec, type BookSpec } from '../lib/book/specs'
 import { spreadCount, spreadOf, spreadPages } from '../lib/book/spreads'
+import { formatMegabytes, serverOnlyIssues, type SaveState } from '../lib/book/render'
 import type { BookDraft, BookPage } from '../types/book'
 
 const FLOW_STEP = '4/5'
@@ -76,7 +78,7 @@ function Preview({ uid, bookId }: { uid: string; bookId: string }) {
   const spec = getBookSpec(state.draft.specId)
   const issues = preflightBook(state.draft, spec)
   return checking
-    ? <CheckView bookId={bookId} draft={state.draft} spec={spec} issues={issues} onBack={() => setChecking(false)} />
+    ? <CheckView bookId={bookId} draft={state.draft} spec={spec} issues={issues} save={state.save} onBack={() => setChecking(false)} />
     : <BookView bookId={bookId} draft={state.draft} spec={spec} issues={issues} onCheck={() => setChecking(true)} />
 }
 
@@ -175,7 +177,62 @@ function BookView({ bookId, draft, spec, issues, onCheck }: { bookId: string; dr
   </SafeAreaView>
 }
 
-function CheckView({ bookId, draft, spec, issues, onBack }: { bookId: string; draft: BookDraft; spec: BookSpec; issues: PreflightIssue[]; onBack: () => void }) {
+function IssueRow({ bookId, draft, spec, issue }: { bookId: string; draft: BookDraft; spec: BookSpec; issue: PreflightIssue }) {
+  const tone = SEVERITY[issue.severity]
+  const Icon = issue.severity === 'error' ? XCircle : issue.severity === 'warn' ? AlertTriangle : Eye
+  const target = issue.pageIndex ?? draft.pages.length - 1
+  const page = issue.pageIndex !== null ? draft.pages[issue.pageIndex] : undefined
+  return <View style={styles.row}>
+    <View style={styles.rowThumb}>
+      {page
+        ? <View style={[styles.thumbFrame, issue.severity !== 'info' && { borderColor: tone.color }]}><PageThumb page={page} spec={spec} width={48} /></View>
+        : <View style={styles.thumbBlank} />}
+      <Text style={[styles.thumbLabel, issue.severity !== 'info' && { color: tone.color }]}>{issue.pageIndex !== null ? issue.pageIndex + 1 : '전체'}</Text>
+    </View>
+    <View style={styles.rowBody}>
+      <View style={styles.badge}><Icon size={14} color={tone.color} /><Text style={[styles.badgeText, { color: tone.color }]}>{tone.label}</Text></View>
+      <Text style={styles.rowTitle}>{issue.title}</Text>
+      <Text style={styles.detail}>{issue.detail}</Text>
+      <Pressable accessibilityRole="button" onPress={() => openInEditor(bookId, target, issue.elementId)} style={({ pressed }) => [styles.jump, pressed && { opacity: 0.7 }]}>
+        <Text style={styles.jumpText}>{issue.pageIndex !== null ? `${issue.pageIndex + 1}쪽으로 이동` : '페이지 편집으로 이동'}</Text>
+      </Pressable>
+    </View>
+  </View>
+}
+
+/**
+ * Development builds only, until ordering exists: makes the print PDF of the saved book
+ * on the server and lists what its check found beyond the app's own.
+ */
+function RenderSection({ bookId, draft, spec, issues, save }: { bookId: string; draft: BookDraft; spec: BookSpec; issues: PreflightIssue[]; save: SaveState }) {
+  const { last, phase, start } = useBookRender(bookId, save)
+  const current = last && save.kind === 'saved' && last.revision === save.revision ? last : null
+  const extra = current ? serverOnlyIssues(current.issues, issues) : []
+  const working = phase.kind === 'working'
+  return <View style={styles.render}>
+    <View style={styles.renderHead}>
+      <FileText size={18} color={p.primary} />
+      <Text style={styles.renderTitle}>인쇄 파일 <Text style={styles.renderTag}>개발용</Text></Text>
+    </View>
+    <Text style={styles.detail}>서버에 저장된 내용으로 PDF를 만들고, 실제 글꼴과 사진 파일로 한 번 더 확인해요.</Text>
+    {save.kind === 'unsaved' && <Text style={styles.detail}>아직 저장되지 않은 변경이 있어요. 저장이 끝나야 만들 수 있어요.</Text>}
+    {current && <View style={styles.renderResult}>
+      <Text style={styles.rowTitle}>{current.pageCount}쪽 · {formatMegabytes(current.bytes)} · {Math.max(1, Math.round(current.ms / 1000))}초</Text>
+      <Text style={styles.detail}>사진 {current.photos.total}장 중 고화질 사본 {current.photos.printCopies}장 · 인쇄 해상도로 줄인 사진 {current.photos.resized}장</Text>
+      <Text style={styles.detail}>{current.readiness === 'blocked' ? `주문 전에 고쳐야 할 항목 ${current.counts.error}건` : current.readiness === 'confirm' ? `수정 권장 ${current.counts.warn}건` : '서버 확인에서도 문제가 없었어요'}</Text>
+    </View>}
+    {last && !current && <Text style={styles.detail}>지난 인쇄 파일은 이전 저장본({last.revision}번째 저장)으로 만들었어요.</Text>}
+    {phase.kind === 'working' && <View style={styles.renderWorking}><ActivityIndicator color={p.primary} /><Text style={[styles.detail, { flex: 1 }]}>{phase.text}</Text></View>}
+    {phase.kind === 'error' && <Notice error>{phase.message}</Notice>}
+    <Button variant="secondary" title={current ? '다시 만들기' : '인쇄 파일 만들기'} disabled={working || save.kind === 'unsaved'} onPress={() => void start()} />
+    {extra.length > 0 && <>
+      <Text style={styles.renderSub}>서버 확인에서 더 찾은 항목 {extra.length}건</Text>
+      {extra.map(issue => <IssueRow key={`server:${issue.id}`} bookId={bookId} draft={draft} spec={spec} issue={issue} />)}
+    </>}
+  </View>
+}
+
+function CheckView({ bookId, draft, spec, issues, save, onBack }: { bookId: string; draft: BookDraft; spec: BookSpec; issues: PreflightIssue[]; save: SaveState; onBack: () => void }) {
   const counts = countBySeverity(issues)
   const readiness = orderReadiness(issues)
   const pages = flaggedPages(issues).length
@@ -190,27 +247,8 @@ function CheckView({ bookId, draft, spec, issues, onBack }: { bookId: string; dr
     <ScrollView contentContainerStyle={styles.list}>
       <Text style={styles.heading}>{heading}</Text>
       {issues.length === 0 && <Text style={styles.detail}>사진 해상도, 글 위치, 재단, 쪽 수에서 찾은 문제가 없어요.</Text>}
-      {issues.map(issue => {
-        const tone = SEVERITY[issue.severity]
-        const Icon = issue.severity === 'error' ? XCircle : issue.severity === 'warn' ? AlertTriangle : Eye
-        const target = issue.pageIndex ?? draft.pages.length - 1
-        return <View key={issue.id} style={styles.row}>
-          <View style={styles.rowThumb}>
-            {issue.pageIndex !== null
-              ? <View style={[styles.thumbFrame, issue.severity !== 'info' && { borderColor: tone.color }]}><PageThumb page={draft.pages[issue.pageIndex]} spec={spec} width={48} /></View>
-              : <View style={styles.thumbBlank} />}
-            <Text style={[styles.thumbLabel, issue.severity !== 'info' && { color: tone.color }]}>{issue.pageIndex !== null ? issue.pageIndex + 1 : '전체'}</Text>
-          </View>
-          <View style={styles.rowBody}>
-            <View style={styles.badge}><Icon size={14} color={tone.color} /><Text style={[styles.badgeText, { color: tone.color }]}>{tone.label}</Text></View>
-            <Text style={styles.rowTitle}>{issue.title}</Text>
-            <Text style={styles.detail}>{issue.detail}</Text>
-            <Pressable accessibilityRole="button" onPress={() => openInEditor(bookId, target, issue.elementId)} style={({ pressed }) => [styles.jump, pressed && { opacity: 0.7 }]}>
-              <Text style={styles.jumpText}>{issue.pageIndex !== null ? `${issue.pageIndex + 1}쪽으로 이동` : '페이지 편집으로 이동'}</Text>
-            </Pressable>
-          </View>
-        </View>
-      })}
+      {issues.map(issue => <IssueRow key={issue.id} bookId={bookId} draft={draft} spec={spec} issue={issue} />)}
+      {__DEV__ && <RenderSection bookId={bookId} draft={draft} spec={spec} issues={issues} save={save} />}
     </ScrollView>
     <View style={[styles.bottom, styles.bottomBar]}>
       <View style={{ flex: 1, gap: 2 }}>
@@ -275,4 +313,11 @@ const styles = StyleSheet.create({
   detail: { fontSize: 14, lineHeight: 21, color: p.muted },
   jump: { marginTop: 4, minHeight: 36, justifyContent: 'center', paddingHorizontal: 12, borderRadius: 18, backgroundColor: p.surface },
   jumpText: { fontSize: 13, fontWeight: '700', color: p.primary },
+  render: { gap: 8, paddingTop: 20, marginTop: 8, borderTopWidth: 1, borderColor: p.line, alignItems: 'stretch' },
+  renderHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  renderTitle: { fontSize: 17, fontWeight: '700', color: p.ink },
+  renderTag: { fontSize: 13, fontWeight: '600', color: p.muted },
+  renderResult: { gap: 2, paddingVertical: 4 },
+  renderWorking: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  renderSub: { fontSize: 15, fontWeight: '700', color: p.ink, paddingTop: 12 },
 })
