@@ -3,7 +3,8 @@ const assert = require('node:assert/strict')
 const { Buffer } = require('node:buffer')
 const { readFileSync } = require('node:fs')
 const { PDFDocument } = require('pdf-lib')
-const { renderBook, imageKind } = require('./bookRenderCore')
+const sharp = require('sharp')
+const { renderBook } = require('./bookRenderCore')
 const { runRenderJob, claimDecision, photoPath, draftFrom, RenderError, STALE_RENDER_MS } = require('./bookRenderJob')
 const { storagePathFromUrl } = require('./storagePaths')
 
@@ -28,7 +29,7 @@ test('the PDF has one page per book page, with A5 trim and 3mm bleed boxes', asy
   const pages = Array.from({ length: 4 }, (_, i) => page(`p${i}`, i === 0
     ? [image('i1', ref('post1'), { rotationDeg: 5 }), textBox('t1', '성북천을 따라 · 걸었다… 「봄」', { align: 'center' })]
     : [textBox(`t${i}`, '명조로 쓴 글', { font: 'gowun-batang' })], i === 1 ? { color: '#FFFFFF', pattern: 'grid' } : undefined))
-  const { pdf, issues, stats } = await renderBook({ draft: draft(pages), fonts: FONTS, loadImage: async () => JPEG })
+  const { pdf, issues, stats } = await renderBook({ draft: draft(pages), fonts: FONTS, loadImage: async () => ({ bytes: JPEG, source: 'display' }) })
   const doc = await PDFDocument.load(pdf)
   assert.equal(doc.getPageCount(), 4)
   const first = doc.getPage(0)
@@ -56,17 +57,47 @@ test('text that needs more lines than its box holds is reported', async () => {
 })
 
 test('a photo that cannot be read blocks the order instead of printing a blank', async () => {
-  const { issues, stats } = await renderBook({ draft: draft([page('p0', [image('i1', ref('post1'))])]), fonts: FONTS, loadImage: async () => Buffer.from('not an image') })
+  const { issues, stats } = await renderBook({ draft: draft([page('p0', [image('i1', ref('post1'))])]), fonts: FONTS, loadImage: async () => ({ bytes: Buffer.from('not an image'), source: 'display' }) })
   assert.equal(stats.images, 1)
   const missing = issues.find(issue => issue.kind === 'photo-unavailable')
   assert.equal(missing.severity, 'error')
   assert.equal(missing.pageIndex, 0)
 })
 
-test('only JPEG and PNG bytes are embedded', () => {
-  assert.equal(imageKind(JPEG), 'jpeg')
-  assert.equal(imageKind(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d])), 'png')
-  assert.equal(imageKind(Buffer.from('RIFF....WEBP')), null)
+const solid = (width, height, extra = image => image) => extra(sharp({ create: { width, height, channels: 3, background: { r: 40, g: 90, b: 160 } } })).jpeg({ quality: 95 }).toBuffer()
+
+test('print resolution is judged on the file actually printed, not the size the app recorded', async () => {
+  // The app recorded a 4096px print copy, but only the 1600px display copy could be read.
+  const claimed = { ...ref('post1'), pxWidth: 1600, pxHeight: 1200, printPxWidth: 4096, printPxHeight: 3072 }
+  const fullWidth = image('i1', claimed, { wMm: 148, hMm: 111, xMm: 74, yMm: 105 })
+  const zoomed = { ...fullWidth, crop: { x: 0, y: 0, w: 0.25, h: 0.25 } }
+  const display = await solid(1600, 1200)
+  const fromDisplay = await renderBook({ draft: draft([page('p0', [zoomed])]), fonts: FONTS, loadImage: async () => ({ bytes: display, source: 'display' }) })
+  const low = fromDisplay.issues.find(issue => issue.kind === 'photo-resolution')
+  assert.equal(low.severity, 'error')
+  assert.match(low.detail, /약 69dpi/)
+  assert.equal(fromDisplay.stats.printCopies, 0)
+  // With the print copy the same placement is about 176dpi: a warning, not a block.
+  const print = await solid(4096, 3072)
+  const fromPrint = await renderBook({ draft: draft([page('p0', [zoomed])]), fonts: FONTS, loadImage: async () => ({ bytes: print, source: 'print' }) })
+  assert.equal(fromPrint.issues.find(issue => issue.kind === 'photo-resolution').severity, 'warn')
+  assert.equal(fromPrint.stats.printCopies, 1)
+})
+
+test('a large print copy is scaled down once to what its largest placement needs', async () => {
+  const print = await solid(4096, 3072)
+  // Placed twice: small, and across the page width. 148mm at 300dpi needs 1748px.
+  const small = image('i1', ref('post1'), { wMm: 40, hMm: 30, xMm: 40, yMm: 40 })
+  const wide = image('i2', ref('post1'), { wMm: 148, hMm: 111, xMm: 74, yMm: 150 })
+  let reads = 0
+  const { pdf, stats } = await renderBook({ draft: draft([page('p0', [small]), page('p1', [wide])]), fonts: FONTS, loadImage: async () => { reads++; return { bytes: print, source: 'print' } } })
+  assert.equal(reads, 1)
+  assert.equal(stats.resized, 1)
+  assert.ok(stats.imageBytes < print.length)
+  const doc = await PDFDocument.load(pdf)
+  const xObjects = [...doc.context.enumerateIndirectObjects()].map(([, object]) => object).filter(object => object.dict?.get(doc.context.obj('Subtype'))?.toString() === '/Image')
+  assert.equal(xObjects.length, 1)
+  assert.equal(xObjects[0].dict.get(doc.context.obj('Width')).asNumber(), 1748)
 })
 
 test('photos are read only from the author’s own records, at the listed URL', () => {
@@ -134,7 +165,7 @@ test('a render job checks the caller, draws the latest revision and stores it pr
       { id: 'p1', data: { background: { color: '#FFFFFF' }, elements: [textBox('t1', '안녕')] } },
     ],
     posts: { post1: { uid: 'u1', photoUrls: [url('u1', 'post1', 'a.jpg')] }, post2: { uid: 'u2', photoUrls: [url('u2', 'post2', 'a.jpg')] } },
-    files: { 'posts/u1/post1/a.jpg': JPEG, 'posts/u2/post2/a.jpg': JPEG },
+    files: { 'posts/u1/post1/a.jpg': JPEG, 'posts/u2/post2/a.jpg': JPEG, 'posts/u2/post2/print/a.jpg': JPEG },
   })
   const result = await runRenderJob({ uid: 'u1', bookId: 'b1', revision: 7 }, deps)
   assert.equal(result.status, 'done')
@@ -142,12 +173,28 @@ test('a render job checks the caller, draws the latest revision and stores it pr
   assert.equal(result.readiness, 'blocked')
   assert.equal(result.pdfPath, 'books/u1/b1/render/7/interior.pdf')
   // Another user's photo is never downloaded, and is reported instead.
-  assert.deepEqual(calls.downloads, ['posts/u1/post1/a.jpg'])
+  // The print copy is tried first and the display copy used when there is none.
+  assert.deepEqual(calls.downloads, ['posts/u1/post1/print/a.jpg', 'posts/u1/post1/a.jpg'])
+  assert.deepEqual(result.photos, { total: 2, printCopies: 0, resized: 0 })
   assert.ok(result.issues.some(issue => issue.kind === 'photo-unavailable' && issue.elementId === 'i2'))
   assert.deepEqual(Object.keys(calls.saved).sort(), ['books/u1/b1/render/7/interior.pdf', 'books/u1/b1/render/7/preflight.json'])
   assert.deepEqual(calls.deleted, [['books/u1/b1/render/', 'books/u1/b1/render/7/']])
   assert.equal(calls.finished.token, 'tok')
   assert.equal((await PDFDocument.load(calls.saved['books/u1/b1/render/7/interior.pdf'])).getPageCount(), 2)
+})
+
+test('a render job prints from the private print copy when the record has one', async () => {
+  const print = await solid(4096, 3072)
+  const { deps, calls } = fakeDeps({
+    book: storedBook({ pageIds: ['p0'] }),
+    pages: [{ id: 'p0', data: { background: { color: '#FFFFFF' }, elements: [image('i1', ref('post1'), { wMm: 148, hMm: 111, xMm: 74, yMm: 105 })] } }],
+    posts: { post1: { uid: 'u1', photoUrls: [url('u1', 'post1', 'a.jpg')] } },
+    files: { 'posts/u1/post1/print/a.jpg': print, 'posts/u1/post1/a.jpg': JPEG },
+  })
+  const result = await runRenderJob({ uid: 'u1', bookId: 'b1', revision: 7 }, deps)
+  assert.deepEqual(calls.downloads, ['posts/u1/post1/print/a.jpg'])
+  assert.deepEqual(result.photos, { total: 1, printCopies: 1, resized: 1 })
+  assert.ok(!result.issues.some(issue => issue.kind === 'photo-resolution'))
 })
 
 test('a render job refuses strangers, stale revisions and bad input', async () => {

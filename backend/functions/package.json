@@ -3,7 +3,7 @@
   "private": true,
   "main": "index.js",
   "scripts": {
-    "test": "node --test nativePush.test.cjs placeSearch.test.cjs kakaoAuth.test.cjs counters.test.cjs postCleanup.test.cjs userSearch.test.cjs postSearch.test.cjs groups.test.cjs chatNotifications.test.cjs bookRender.test.cjs"
+    "test": "node --test nativePush.test.cjs placeSearch.test.cjs kakaoAuth.test.cjs counters.test.cjs postCleanup.test.cjs userSearch.test.cjs postSearch.test.cjs groups.test.cjs chatNotifications.test.cjs bookRender.test.cjs bookImages.test.cjs"
   },
   "engines": {
     "node": "24"
@@ -13,6 +13,7 @@
     "firebase-functions": "^6.0.0",
     "fontkit": "2.0.4",
     "jose": "^6.2.12",
-    "pdf-lib": "1.17.1"
+    "pdf-lib": "1.17.1",
+    "sharp": "0.35.5"
   }
 }
