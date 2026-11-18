@@ -90,6 +90,8 @@ export function useBookEditor(uid: string, bookId: string) {
     conflict: holder.phase === 'ready' && (holder.conflict || saveStatus === 'conflict'),
     dispatch: dispatch as (action: HistoryAction) => void,
     saveStatus,
+    /** Writes this device's copy now, before another screen reads it. */
+    flushLocal: () => session.flushLocal(),
     retrySave: () => {
       void session.retry().then(result => {
         if (result?.kind === 'conflict') dispatch({ type: 'loaded', draft: result.local, conflict: true })

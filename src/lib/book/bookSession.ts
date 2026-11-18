@@ -166,6 +166,10 @@ export function createBookSession(deps: BookSessionDeps) {
     async flush() {
       await Promise.all([localQueue.flush(), serverQueue.flush()])
     },
+    /** Writes this device's copy now. Unlike `flush`, it never waits for the network. */
+    async flushLocal() {
+      await localQueue.flush()
+    },
     /** After a failure or an offline start: reconnects if needed, then sends again. */
     async retry(): Promise<OpenResult | null> {
       if (conflict || deleted) return null

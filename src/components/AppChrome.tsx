@@ -40,9 +40,9 @@ export function useAppChrome() {
   const authPage = ['/', '/login', '/signup'].includes(pathname);
   const chatRoom = /^\/chats\/.+/.test(pathname);
   const form = pathname === '/posts/new' || pathname === '/posts/edit';
-  // The book editor needs the whole screen for the page and its toolbar; making a
-  // new book brings its own top bar and bottom action bar.
-  const bookEditor = /^\/books\/[^/]+\/edit$/.test(pathname) || pathname === '/books/new';
+  // The book editor needs the whole screen for the page and its toolbar; making and
+  // previewing a book bring their own top bar and bottom action bar.
+  const bookEditor = /^\/books\/[^/]+\/(edit|preview)$/.test(pathname) || pathname === '/books/new';
   // The detail feed brings its own top bar on phones.
   const feedDetail = /^\/feed\/.+/.test(pathname) && width <= 860;
   return { pathname, header: !authPage && !chatRoom && !form && !feedDetail && !bookEditor, tabs: !authPage && !chatRoom && !form && !bookEditor && !navHidden };
