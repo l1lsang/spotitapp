@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ActivityIndicator, BackHandler, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { router } from 'expo-router'
@@ -49,7 +49,16 @@ function CreateFlow({ uid }: { uid: string }) {
   const [coverStyle, setCoverStyle] = useState<BookCoverStyle>('photo')
   const [pageCount, setPageCount] = useState<number | null>(null)
   const [creating, setCreating] = useState<string>('')
+  /** Creation is queued until the device is online; leaving is fine then. */
+  const [waiting, setWaiting] = useState(false)
+  const busy = !!creating && !waiting
   const [createError, setCreateError] = useState('')
+  // A book whose creation finishes after the user left this screen must not pull them back.
+  const alive = useRef(true)
+  useEffect(() => {
+    alive.current = true
+    return () => { alive.current = false }
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -61,15 +70,20 @@ function CreateFlow({ uid }: { uid: string }) {
   }, [uid, attempt])
 
   const back = () => {
-    if (creating) return
+    if (busy) return
+    // The queued book is still created once online; the list shows it then.
+    if (waiting) return leave()
     if (step === 'pick') leave()
     else setStep('pick')
   }
   useEffect(() => {
     if (step === 'pick') return
-    const subscription = BackHandler.addEventListener('hardwareBackPress', () => { if (!creating) setStep('pick'); return true })
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (!busy) { if (waiting) leave(); else setStep('pick') }
+      return true
+    })
     return () => subscription.remove()
-  }, [step, creating])
+  }, [step, busy, waiting])
 
   const byId = useMemo(() => new Map((posts ?? []).map(post => [post.id, post])), [posts])
   const chosen = selected.map(id => byId.get(id)).filter((post): post is Post => !!post)
@@ -87,6 +101,12 @@ function CreateFlow({ uid }: { uid: string }) {
     setCreating(urls.length ? `사진 확인 중 0/${urls.length}` : '책을 만드는 중…')
     try {
       const sizes = await measurePhotos(urls, done => setCreating(`사진 확인 중 ${done}/${urls.length}`))
+      if (urls.length && sizes.every(size => size === null)) {
+        // Every photo failed: almost always no connection. A book without its photos is not what was asked for.
+        setCreateError('사진을 불러오지 못했어요. 연결을 확인한 뒤 다시 시도해 주세요.')
+        setCreating('')
+        return
+      }
       setCreating('책을 만드는 중…')
       let cursor = 0
       const records: LayoutRecord[] = chosen.map(post => {
@@ -105,16 +125,28 @@ function CreateFlow({ uid }: { uid: string }) {
         sourcePostIds: chosen.map(post => post.id), updatedAt: new Date().toISOString(),
         pages: layoutBook({ title, subtitle, records, pageCount: pages }, spec, randomUUID),
       }
-      await createBook(uid, draft)
-      router.replace({ pathname: '/books/[bookId]/edit', params: { bookId: id } })
+      // Firestore keeps an offline write queued instead of failing it, so say what is happening.
+      const slow = setTimeout(() => {
+        if (!alive.current) return
+        setWaiting(true)
+        setCreating('연결을 기다리는 중이에요. 연결되면 책이 만들어지고, 이 화면은 나가셔도 돼요.')
+      }, 5000)
+      try {
+        await createBook(uid, draft)
+      } finally {
+        clearTimeout(slow)
+        if (alive.current) setWaiting(false)
+      }
+      if (alive.current) router.replace({ pathname: '/books/[bookId]/edit', params: { bookId: id } })
     } catch {
+      if (!alive.current) return
       setCreateError('책을 만들지 못했어요. 연결을 확인한 뒤 다시 시도해 주세요.')
       setCreating('')
     }
   }
 
   const header = (label: string, right?: ReactNode) => <View style={styles.top}>
-    <IconButton label="뒤로 가기" disabled={!!creating} onPress={back}><ChevronLeft size={22} color={p.ink} /></IconButton>
+    <IconButton label="뒤로 가기" disabled={busy} onPress={back}><ChevronLeft size={22} color={p.ink} /></IconButton>
     <Text accessibilityRole="header" style={styles.topTitle}>{label}</Text>
     {right}
   </View>

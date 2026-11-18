@@ -28,12 +28,15 @@ import type { BookSaveStatus } from '../lib/book/bookSession'
 const SAVE_LABEL: Record<BookSaveStatus, string> = {
   saved: '저장됨',
   saving: '저장 중…',
+  // The write is queued and goes out by itself once connected: nothing to retry.
+  offline: '오프라인 · 이 기기에 저장됨',
   local: '이 기기에만 저장됨',
   error: '저장 안 됨',
   conflict: '다른 기기에서 수정됨',
   deleted: '삭제된 책',
 }
 const RETRYABLE: readonly BookSaveStatus[] = ['local', 'error']
+const ALERT: readonly BookSaveStatus[] = ['local', 'error', 'conflict', 'deleted']
 
 const BLOCKED_TEXT: Record<BlockedReason, string> = {
   deleted: '이 책은 삭제됐어요.',
@@ -120,7 +123,7 @@ function Editor({ uid, bookId }: { uid: string; bookId: string }) {
         <Text numberOfLines={1} style={styles.title}>{editor.draft.title || '제목 없는 책'}</Text>
         <Pressable accessibilityRole="button" disabled={!RETRYABLE.includes(saveStatus)} onPress={retrySave}
           accessibilityLabel={RETRYABLE.includes(saveStatus) ? `${SAVE_LABEL[saveStatus]}, 다시 저장` : SAVE_LABEL[saveStatus]}>
-          <Text numberOfLines={1} style={[styles.status, saveStatus !== 'saved' && saveStatus !== 'saving' && styles.statusError]}>
+          <Text numberOfLines={1} style={[styles.status, ALERT.includes(saveStatus) && styles.statusError]}>
             {editor.pageIndex + 1}/{pages.length}쪽 · {SAVE_LABEL[saveStatus]}{RETRYABLE.includes(saveStatus) ? ' · 다시 저장' : ''}
           </Text>
         </Pressable>
