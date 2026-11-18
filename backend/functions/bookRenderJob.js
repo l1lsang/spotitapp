@@ -5,6 +5,7 @@ const { Buffer } = require('node:buffer')
 const { readBookMeta, readImageRef, readPage, DEFAULT_BACKGROUND } = require('./bookShared/draft')
 const { countBySeverity, orderReadiness } = require('./bookShared/preflight')
 const { renderBook } = require('./bookRenderCore')
+const { printPathFor } = require('./storagePaths')
 
 const BOOK_ID = /^[A-Za-z0-9_-]{1,64}$/
 /** A render still marked as running after this long is treated as abandoned. */
@@ -80,9 +81,16 @@ async function runRenderJob({ uid, bookId, revision }, deps) {
     const { pdf, issues, stats } = await renderBook({
       draft,
       fonts: await deps.fonts(),
+      // The private print copy beside the display file when there is one (records saved
+      // before print copies, or whose upload failed, only have the display copy). The
+      // print path is derived from the checked display path, so it is just as safe.
       loadImage: async ref => {
         const path = photoPath(ref, uid, posts, deps.storagePathFromUrl)
-        return path ? deps.download(path) : null
+        if (!path) return null
+        const print = await deps.download(printPathFor(path))
+        if (print) return { bytes: print, source: 'print' }
+        const display = await deps.download(path)
+        return display ? { bytes: display, source: 'display' } : null
       },
     })
     const prefix = renderPrefix(uid, bookId)
@@ -91,7 +99,10 @@ async function runRenderJob({ uid, bookId, revision }, deps) {
     await deps.save(`${folder}preflight.json`, Buffer.from(JSON.stringify({ revision, issues, stats })), 'application/json')
     // Only the latest revision's files are kept while the book is a draft.
     await deps.deleteExcept(prefix, folder)
-    const summary = summaryOf(revision, draft.pages.length, issues, { bytes: stats.bytes, ms: stats.ms, pdfPath: `${folder}interior.pdf` })
+    const summary = summaryOf(revision, draft.pages.length, issues, {
+      bytes: stats.bytes, ms: stats.ms, pdfPath: `${folder}interior.pdf`,
+      photos: { total: stats.images, printCopies: stats.printCopies, resized: stats.resized },
+    })
     await deps.finish({ bookId, token: claim.token, summary })
     return { status: 'done', ...summary }
   } catch (error) {

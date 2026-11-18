@@ -87,7 +87,7 @@ exports.renderBookPdf = onCall({
   const data = request.data || {}
   try {
     const result = await runRenderJob({ uid: request.auth && request.auth.uid, bookId: data.bookId, revision: data.revision }, firebaseDeps())
-    if (result.status === 'done' && !result.cached) logger.info('book rendered', { bookId: data.bookId, revision: result.revision, pages: result.pageCount, bytes: result.bytes, ms: result.ms })
+    if (result.status === 'done' && !result.cached) logger.info('book rendered', { bookId: data.bookId, revision: result.revision, pages: result.pageCount, bytes: result.bytes, ms: result.ms, photos: result.photos })
     return result
   } catch (error) {
     if (error instanceof RenderError) throw new HttpsError(error.code, error.message)

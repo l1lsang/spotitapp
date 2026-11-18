@@ -14,6 +14,7 @@ const { baselines, breakLines } = require('./bookShared/textLayout')
 const { fontRuns, hasGlyph, FALLBACK_FONT } = require('./bookShared/glyphs')
 const { preflightBook } = require('./bookShared/preflight')
 const { getBookSpec } = require('./bookShared/specs')
+const { prepareImage } = require('./bookImages')
 const { PATTERN_STEP_MM, getBookFont } = require('./bookShared/styles')
 
 const LINE_COLOR = '#C5CEC0'
@@ -50,17 +51,12 @@ const fontkitAdapter = {
 
 const hex = value => rgb(parseInt(value.slice(1, 3), 16) / 255, parseInt(value.slice(3, 5), 16) / 255, parseInt(value.slice(5, 7), 16) / 255)
 
-function imageKind(bytes) {
-  if (bytes[0] === 0xff && bytes[1] === 0xd8) return 'jpeg'
-  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return 'png'
-  return null
-}
-
 /**
  * @param {object} input
  * @param {object} input.draft  a book draft (schema of src/types/book.ts)
  * @param {Record<string, Uint8Array>} input.fonts  font file bytes by book font id
- * @param {(ref: object) => Promise<Uint8Array | null>} input.loadImage  photo bytes, or null when it cannot be used
+ * @param {(ref: object) => Promise<{ bytes: Uint8Array, source: 'print' | 'display' } | null>} input.loadImage
+ *   a photo's file, from its private print copy when it has one; null when it cannot be used
  * @returns {Promise<{ pdf: Uint8Array, issues: object[], stats: object }>}
  */
 async function renderBook({ draft, fonts: fontFiles, loadImage, title }) {
@@ -81,17 +77,41 @@ async function renderBook({ draft, fonts: fontFiles, loadImage, title }) {
   if (!fonts[FALLBACK_FONT]) throw new Error(`the fallback font ${FALLBACK_FONT} is required`)
 
   const issues = []
-  const images = new Map()
-  async function embedImage(ref) {
-    if (!images.has(ref.url)) {
-      images.set(ref.url, (async () => {
-        const bytes = await loadImage(ref)
-        const kind = bytes ? imageKind(bytes) : null
-        if (!kind) return null
-        return kind === 'jpeg' ? pdf.embedJpg(bytes) : pdf.embedPng(bytes)
-      })())
+  // Each photo is read and prepared once, however often it is placed, at the size its
+  // largest placement needs. Done before the print checks, so resolution is judged on
+  // the file actually printed rather than the size the app recorded.
+  const placements = new Map()
+  for (const page of draft.pages) {
+    for (const element of page.elements) {
+      if (element.type !== 'image') continue
+      if (!placements.has(element.ref.url)) placements.set(element.ref.url, { ref: element.ref, elements: [] })
+      placements.get(element.ref.url).elements.push(element)
     }
-    return images.get(ref.url)
+  }
+  const images = new Map()
+  const imageStats = { printCopies: 0, resized: 0, imageBytes: 0 }
+  for (const [url, { ref, elements }] of placements) {
+    const loaded = await loadImage(ref)
+    const prepared = loaded ? await prepareImage(loaded.bytes, elements) : null
+    if (!prepared) { images.set(url, null); continue }
+    const fromPrint = loaded.source === 'print'
+    const { printPxWidth: _w, printPxHeight: _h, ...plain } = ref
+    images.set(url, {
+      image: await pdf.embedJpg(prepared.bytes),
+      ref: fromPrint
+        ? { ...plain, printPxWidth: prepared.sourceWidth, printPxHeight: prepared.sourceHeight }
+        : { ...plain, pxWidth: prepared.sourceWidth, pxHeight: prepared.sourceHeight },
+    })
+    if (fromPrint) imageStats.printCopies++
+    if (prepared.resized) imageStats.resized++
+    imageStats.imageBytes += prepared.bytes.length
+  }
+  const checked = {
+    ...draft,
+    pages: draft.pages.map(page => ({
+      ...page,
+      elements: page.elements.map(element => (element.type === 'image' && images.get(element.ref.url) ? { ...element, ref: images.get(element.ref.url).ref } : element)),
+    })),
   }
 
   const boxes = pageBoxesPt(spec)
@@ -110,8 +130,8 @@ async function renderBook({ draft, fonts: fontFiles, loadImage, title }) {
     if (background.pattern === 'grid') for (const x of positions(spec.trimMm.w)) page.drawLine({ start: { x, y: 0 }, end: { x, y: H }, thickness, color: hex(LINE_COLOR) })
   }
 
-  async function drawImage(page, element, pageIndex) {
-    const embedded = await embedImage(element.ref)
+  function drawImage(page, element, pageIndex) {
+    const embedded = images.get(element.ref.url)?.image
     if (!embedded) {
       issues.push({
         id: `photo-unavailable:${element.id}`, kind: 'photo-unavailable', severity: 'error', pageIndex, elementId: element.id,
@@ -168,7 +188,7 @@ async function renderBook({ draft, fonts: fontFiles, loadImage, title }) {
     page.drawRectangle({ x: 0, y: 0, width: W, height: H, color: hex(bookPage.background.color) })
     drawPattern(page, bookPage.background)
     for (const element of bookPage.elements) {
-      if (element.type === 'image') await drawImage(page, element, pageIndex)
+      if (element.type === 'image') drawImage(page, element, pageIndex)
       else if (element.type === 'text') drawText(page, element, pageIndex)
     }
   }
@@ -176,14 +196,17 @@ async function renderBook({ draft, fonts: fontFiles, loadImage, title }) {
   // a fraction of a second into minutes (spike finding).
   const bytes = await pdf.save({ objectsPerTick: Infinity })
 
-  const all = [...preflightBook(draft, spec), ...issues]
+  const all = [...preflightBook(checked, spec), ...issues]
   const order = { error: 0, warn: 1, info: 2 }
   all.sort((a, b) => order[a.severity] - order[b.severity] || (a.pageIndex ?? -1) - (b.pageIndex ?? -1))
   return {
     pdf: bytes,
     issues: all,
-    stats: { pages: draft.pages.length, images: images.size, bytes: bytes.length, ms: Date.now() - started, fonts: Object.keys(fonts).map(id => getBookFont(id).label) },
+    stats: {
+      pages: draft.pages.length, images: images.size, ...imageStats, bytes: bytes.length,
+      ms: Date.now() - started, fonts: Object.keys(fonts).map(id => getBookFont(id).label),
+    },
   }
 }
 
-module.exports = { renderBook, fontkitAdapter, imageKind }
+module.exports = { renderBook, fontkitAdapter }
