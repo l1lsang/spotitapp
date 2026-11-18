@@ -1,3 +1,4 @@
+const { Buffer } = require('node:buffer')
 const { createHash, randomBytes, timingSafeEqual } = require('node:crypto')
 const { onCall, HttpsError } = require('firebase-functions/v2/https')
 const { onDocumentCreated, onDocumentWritten } = require('firebase-functions/v2/firestore')
@@ -430,7 +431,7 @@ exports.adminManageUser = onCall(options, async request => {
   try {
     await admin.auth().updateUser(targetUid, { disabled: suspended })
     if (suspended) await admin.auth().revokeRefreshTokens(targetUid)
-  } catch (error) {
+  } catch {
     // Keep the account gated on partial failure; retrying the same action reconciles Auth.
     throw new HttpsError('unavailable', '계정 인증 상태를 동기화하지 못했습니다. 같은 작업을 다시 시도해 주세요.')
   }

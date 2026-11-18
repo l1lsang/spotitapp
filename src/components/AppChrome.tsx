@@ -5,6 +5,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { router, useIsFocused, usePathname } from 'expo-router';
 import { Bell, List, LogIn, Map, MessageCircle, User, UsersRound } from 'lucide-react-native';
 import { useAuth } from '../hooks/useAuth';
+import { useKeyChange } from '../hooks/useKeyChange';
 import { subscribeToUnreadNotificationCount } from '../services/notificationService';
 import { BrandLogo } from './BrandLogo';
 import { useKeyboardVisible } from './keyboard';
@@ -39,9 +40,12 @@ export function useAppChrome() {
   const authPage = ['/', '/login', '/signup'].includes(pathname);
   const chatRoom = /^\/chats\/.+/.test(pathname);
   const form = pathname === '/posts/new' || pathname === '/posts/edit';
+  // The book editor needs the whole screen for the page and its toolbar; making and
+  // previewing a book bring their own top bar and bottom action bar.
+  const bookEditor = /^\/books\/[^/]+\/(edit|preview)$/.test(pathname) || pathname === '/books/new';
   // The detail feed brings its own top bar on phones.
   const feedDetail = /^\/feed\/.+/.test(pathname) && width <= 860;
-  return { pathname, header: !authPage && !chatRoom && !form && !feedDetail, tabs: !authPage && !chatRoom && !form && !navHidden };
+  return { pathname, header: !authPage && !chatRoom && !form && !feedDetail && !bookEditor, tabs: !authPage && !chatRoom && !form && !bookEditor && !navHidden };
 }
 function activeTab(pathname: string, path: string) {
   if (path === '/map') return pathname === '/map' || pathname.startsWith('/groups');
@@ -53,11 +57,12 @@ export function SiteHeader() {
   const { currentUser, profile, accountReady: firebaseReady } = useAuth();
   const { width } = useWindowDimensions();
   const [unread, setUnread] = useState(0);
+  const uid = currentUser?.uid;
+  if (useKeyChange(`${uid}:${firebaseReady}`)) setUnread(0);
   useEffect(() => {
-    setUnread(0);
-    if (!currentUser || !firebaseReady) return;
-    return subscribeToUnreadNotificationCount(currentUser.uid, setUnread, () => setUnread(0));
-  }, [currentUser?.uid, firebaseReady]);
+    if (!uid || !firebaseReady) return;
+    return subscribeToUnreadNotificationCount(uid, setUnread, () => setUnread(0));
+  }, [uid, firebaseReady]);
   if (!header) return null;
   return <SafeAreaView edges={['top']} style={{ backgroundColor: p.bg }}><View style={[styles.header, width > 860 && { minHeight: 80, paddingHorizontal: 40 }]}>
     <Pressable accessibilityRole="link" accessibilityLabel="피노리 지도 홈" onPress={() => router.push('/map')} style={styles.brandLink}>

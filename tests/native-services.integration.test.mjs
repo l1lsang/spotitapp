@@ -481,6 +481,20 @@ test('shared media rules permit staged uploads and protect private posts and gro
   assert.equal((await storageSdk.getBytes(mediaRef(owner, privatePath))).byteLength, jpeg.byteLength)
   await assert.rejects(storageSdk.getBytes(mediaRef(outsider, privatePath)), mediaDenied)
 
+  // Print copies stay private even when the pin and its display photos are public.
+  const publicId = await posts.createPost({ ...input(), visibility: 'public' }, [], owner.actor)
+  const shownPath = `posts/${owner.uid}/${publicId}/photo.jpg`
+  const printPath = `posts/${owner.uid}/${publicId}/print/photo.jpg`
+  await upload(owner, shownPath)
+  await upload(owner, printPath)
+  assert.equal((await storageSdk.getBytes(mediaRef(outsider, shownPath))).byteLength, jpeg.byteLength)
+  assert.equal((await storageSdk.getBytes(mediaRef(owner, printPath))).byteLength, jpeg.byteLength)
+  await assert.rejects(storageSdk.getBytes(mediaRef(outsider, printPath)), mediaDenied)
+  await assert.rejects(storageSdk.getDownloadURL(mediaRef(outsider, printPath)), mediaDenied)
+  await assert.rejects(upload(outsider, `posts/${owner.uid}/${publicId}/print/other.jpg`), mediaDenied)
+  await assert.rejects(upload(owner, `posts/${owner.uid}/${publicId}/print/photo.png`, jpeg, 'image/png'), mediaDenied)
+  await assert.rejects(upload(owner, `posts/${owner.uid}/${publicId}/print/deeper/photo.jpg`), mediaDenied)
+
   const groups = await owner.service('group')
   const memberGroups = await member.service('group')
   const groupId = await groups.createGroup({ name: '사진 그룹', description: '', visibility: 'private' }, owner.uid)
@@ -523,4 +537,87 @@ test('pin sharing writes a readable message and chat preview, leaving notificati
   const outsiderChats = await outsider.service('chat')
   await assert.rejects(outsiderChats.sendChatMessage(chatId, outsider.actor, message), denied)
   assert.equal((await firestore.getDocs(firestore.collection(recipient.db, 'chats', chatId, 'messages'))).size, 1)
+})
+
+const bookPage = (id, texts = 1) => ({
+  id, background: { color: '#F7F2E8' },
+  elements: Array.from({ length: texts }, (_, index) => ({ id: `${id}-t${index}`, type: 'text', text: `${id} 글 ${index}`, font: 'pretendard', sizePt: 12, color: '#161F1B', align: 'left', lineHeight: 1.5, xMm: 74, yMm: 40 + index, wMm: 100, hMm: 6, rotationDeg: 0 })),
+})
+const bookDraft = (id, pageCount) => ({
+  schemaVersion: 3, id, title: '우리가 걸었던 길', subtitle: '성북천에서 한강까지', specId: 'a5-soft', coverStyle: 'minimal', coverPhoto: null,
+  sourcePostIds: ['post-a', 'post-b'], updatedAt: new Date().toISOString(),
+  pages: Array.from({ length: pageCount }, (_, index) => bookPage(`p${index}`, index === 0 ? 2 : 0)),
+})
+
+test('book drafts are private to their author and every page write must raise the revision once', { timeout: 120000 }, async () => {
+  const owner = await account('책 주인')
+  const other = await account('다른 사람')
+  const books = await owner.service('book')
+  const theirs = await other.service('book')
+  const bookId = books.newBookId()
+  const bookDoc = (client, ...path) => firestore.doc(client.db, 'books', bookId, ...path)
+
+  // A whole 200-page book is created in one batch.
+  const draft = bookDraft(bookId, 200)
+  assert.equal(await books.createBook(owner.uid, draft), 1)
+  const listed = await books.listMyBooks(owner.uid)
+  assert.deepEqual(listed.map(book => [book.id, book.pageCount, book.recordCount, book.title]), [[bookId, 200, 2, '우리가 걸었던 길']])
+  const loaded = await books.loadBook(owner.uid, bookId)
+  assert.equal(loaded.kind, 'ok')
+  assert.equal(loaded.revision, 1)
+  assert.deepEqual(loaded.draft.pages.map(page => page.id), draft.pages.map(page => page.id))
+  assert.deepEqual(loaded.draft.pages[0], draft.pages[0])
+
+  // Reorder, edit one page, remove one: one batch at revision 1 -> 2.
+  const edited = { ...draft, title: '새 제목', pages: [draft.pages[2], draft.pages[0], bookPage('p1', 3), ...draft.pages.slice(4)] }
+  await books.writeBookChanges(bookId, edited, { baseRevision: 1, upserts: [edited.pages[2]], deletes: ['p3'] })
+  const after = await books.loadBook(owner.uid, bookId)
+  assert.equal(after.revision, 2)
+  assert.equal(after.draft.title, '새 제목')
+  assert.deepEqual(after.draft.pages.slice(0, 3).map(page => page.id), ['p2', 'p0', 'p1'])
+  assert.equal(after.draft.pages[2].elements.length, 3)
+  assert.equal((await firestore.getDocFromServer(bookDoc(owner, 'pages', 'p3'))).exists(), false)
+
+  // A second device still at revision 1 is refused, and nothing it sent lands.
+  await assert.rejects(books.writeBookChanges(bookId, draft, { baseRevision: 1, upserts: [bookPage('p5', 4)], deletes: [] }), error => books.isRefusal(error))
+  assert.equal((await books.loadBook(owner.uid, bookId)).draft.pages.find(page => page.id === 'p5').elements.length, 0)
+
+  // Pages cannot change without the book's revision, or carry more than 60 elements.
+  await assert.rejects(firestore.setDoc(bookDoc(owner, 'pages', 'p5'), { background: { color: '#FFFFFF' }, elements: [] }), denied)
+  await assert.rejects(books.writeBookChanges(bookId, edited, { baseRevision: 2, upserts: [bookPage('p5', 61)], deletes: [] }), denied)
+  // Status, author and revision jumps are not the client's to set.
+  await assert.rejects(firestore.updateDoc(bookDoc(owner), { status: 'locked', revision: 3, updatedAt: firestore.serverTimestamp() }), denied)
+  await assert.rejects(firestore.updateDoc(bookDoc(owner), { uid: other.uid, revision: 3, updatedAt: firestore.serverTimestamp() }), denied)
+  await assert.rejects(firestore.updateDoc(bookDoc(owner), { title: '건너뛰기', revision: 4, updatedAt: firestore.serverTimestamp() }), denied)
+  await assert.rejects(firestore.setDoc(firestore.doc(owner.db, 'books', books.newBookId()), { uid: other.uid, title: '', subtitle: '', specId: 'a5-soft', coverStyle: 'minimal', coverPhoto: null, pageIds: ['x'], sourcePostIds: [], revision: 1, status: 'draft', schemaVersion: 3, createdAt: firestore.serverTimestamp(), updatedAt: firestore.serverTimestamp() }), denied)
+
+  // Other accounts can neither read, list, write nor delete it.
+  await assert.rejects(theirs.loadBook(other.uid, bookId), denied)
+  await assert.rejects(theirs.listMyBooks(owner.uid), denied)
+  await assert.rejects(firestore.getDocs(firestore.collection(other.db, 'books', bookId, 'pages')), denied)
+  await assert.rejects(theirs.writeBookChanges(bookId, edited, { baseRevision: 2, upserts: [], deletes: [] }), denied)
+  await assert.rejects(firestore.deleteDoc(bookDoc(other)), denied)
+  assert.deepEqual(await theirs.listMyBooks(other.uid), [])
+
+  // Print render status is written by the server only and read by the author only.
+  const renderDoc = client => firestore.doc(client.db, 'bookRenders', bookId)
+  await assert.rejects(firestore.setDoc(renderDoc(owner), { uid: owner.uid, revision: 2, status: 'done' }), denied)
+  const seeded = await fetch(`http://127.0.0.1:8281/v1/projects/demo-spotit-native/databases/(default)/documents/bookRenders/${bookId}`, {
+    method: 'PATCH', headers: { Authorization: 'Bearer owner', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields: { uid: { stringValue: owner.uid }, revision: { integerValue: '2' }, status: { stringValue: 'done' } } }),
+  })
+  assert.equal(seeded.status, 200)
+  assert.equal((await firestore.getDocFromServer(renderDoc(owner))).get('status'), 'done')
+  await assert.rejects(firestore.getDocFromServer(renderDoc(other)), denied)
+  await assert.rejects(firestore.updateDoc(renderDoc(owner), { status: 'rendering' }), denied)
+  await assert.rejects(firestore.getDocs(firestore.collection(owner.db, 'bookRenders')), denied)
+
+  // Deleting removes the book and its pages; a deleted book reads as missing.
+  await books.deleteBook(bookId)
+  assert.deepEqual(await books.loadBook(owner.uid, bookId), { kind: 'missing' })
+  // Read past the rules (emulator owner access) to confirm no page was left behind.
+  const leftover = await fetch(`http://127.0.0.1:8281/v1/projects/demo-spotit-native/databases/(default)/documents/books/${bookId}/pages`, { headers: { Authorization: 'Bearer owner' } })
+  assert.equal(leftover.status, 200)
+  assert.equal(((await leftover.json()).documents ?? []).length, 0)
+  assert.deepEqual(await books.listMyBooks(owner.uid), [])
 })

@@ -1,0 +1,67 @@
+# PR과 dev·main 반영 시 검사를 실행한다.
+# verify: 브랜치 보호의 필수 검사. lint: 기존 오류 정리 전까지 결과만 표시한다.
+name: CI
+
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            backend/functions/package-lock.json
+
+      - name: 앱 의존성 설치
+        run: npm ci
+
+      - name: 백엔드 의존성 설치
+        run: npm ci
+        working-directory: backend/functions
+
+      - name: 타입 검사
+        run: npm run typecheck
+
+      - name: 앱 테스트
+        run: npm test
+
+      - name: 백엔드 테스트
+        run: npm test
+        working-directory: backend/functions
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: 앱 의존성 설치
+        run: npm ci
+
+      - name: 린트
+        run: npx expo lint

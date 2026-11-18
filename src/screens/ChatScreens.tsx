@@ -19,6 +19,7 @@ import { Avatar, Button, Chip, Empty, Field, IconButton, Notice, Screen, SearchB
 import { useAuth } from '../hooks/useAuth';
 import { useBlockedUsers, withoutBlocked } from '../hooks/useBlockedUsers';
 import { usePeopleSearch } from '../hooks/usePeopleSearch';
+import { useKeyChange } from '../hooks/useKeyChange';
 import { getDirectChatPartnerIds } from '../lib/chatCandidates';
 import { getChatMedia, getPinnedChatMessages } from '../lib/chatCollections';
 import { collectChatMentions, filterMentionCandidates, getActiveChatMention, getChatTextSegments, insertChatMention } from '../lib/chatMentions';
@@ -158,7 +159,7 @@ export function ChatRoomScreen() {
   // Messages from blocked members vanish from the room as soon as the block is saved.
   const messages = useMemo(() => withoutBlocked(allMessages, blockedIds), [allMessages, blockedIds])
   const [blockTarget, setBlockTarget] = useState<BlockTarget | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [subscribing, setLoading] = useState(true)
   const [messagesLoading, setMessagesLoading] = useState(false)
   const [error, setError] = useState('')
   const [messageError, setMessageError] = useState('')
@@ -220,17 +221,20 @@ export function ChatRoomScreen() {
     return () => listener.remove()
   }, [])
   useEffect(() => () => { if (retryJump.current) clearTimeout(retryJump.current) }, [])
-  useEffect(() => {
+  // Another room or account starts from an empty room; a signed-out viewer loads nothing.
+  const loading = !!uid && firebaseReady && !!chatId && subscribing
+  if (useKeyChange(`${chatId}:${uid}:${firebaseReady}:${revision}`)) {
     setChat(null); setMessages([]); setError(''); setContent(''); setPickedMentions({}); setPhoto(null); setSheet(null); setSelectedMessageId(null)
-    if (!uid || !firebaseReady || !chatId) { setLoading(false); return }
     setLoading(true)
+  }
+  useEffect(() => {
+    if (!uid || !firebaseReady || !chatId) return
     return subscribeToChat(chatId, uid, next => { setChat(next); setLoading(false); if (!next) setError('참여 중인 채팅방을 찾을 수 없습니다.') }, e => { setError(e.message); setLoading(false) })
   }, [chatId, uid, firebaseReady, revision])
   const activeChatId = chat?.id
+  if (useKeyChange(`${activeChatId}:${revision}`)) { setMessages([]); setMessageError(''); setMessagesLoading(!!activeChatId) }
   useEffect(() => {
-    setMessages([]); setMessageError('')
-    if (!activeChatId) { setMessagesLoading(false); return }
-    setMessagesLoading(true)
+    if (!activeChatId) return
     return subscribeToChatMessages(activeChatId, next => { setMessages(next); setMessagesLoading(false) }, e => { setMessages([]); setMessageError(e.message); setMessagesLoading(false) })
   }, [activeChatId, revision])
   useEffect(() => {

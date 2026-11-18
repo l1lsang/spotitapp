@@ -22,6 +22,7 @@ import { JoinGroupButton } from './GroupScreens';
 import { usePosts } from '../hooks/usePosts';
 import { useGroups } from '../hooks/useGroups';
 import { useAuth } from '../hooks/useAuth';
+import { useKeyChange } from '../hooks/useKeyChange';
 import { useBlockedUsers, withoutBlocked } from '../hooks/useBlockedUsers';
 import { usePhotoRecordFlow } from '../hooks/usePhotoRecordFlow';
 import { SEOUL_CITY_HALL, useCurrentLocation } from '../hooks/useCurrentLocation';
@@ -86,39 +87,48 @@ function ScopedMap({ groupId, lat, lng }: { groupId: string; lat?: string; lng?:
   }, []);
   const photoRecord = usePhotoRecordFlow(focusMap);
   const photoFlow = photoRecord.flow;
+  const closeFlow = photoRecord.close;
+  const requestLocation = geo.requestLocation;
+  const uid = currentUser?.uid;
 
   useEffect(() => {
-    if (currentUser && profile?.onboardingComplete === false) router.replace('/signup');
-  }, [currentUser?.uid, profile?.onboardingComplete]);
+    if (uid && profile?.onboardingComplete === false) router.replace('/signup');
+  }, [uid, profile?.onboardingComplete]);
   useEffect(() => {
     if (groupId || lat || lng || !firebaseReady) return;
     let active = true;
-    void geo.requestLocation(false).then(next => { if (active && next) focusMap(next); });
+    void requestLocation(false).then(next => { if (active && next) focusMap(next); });
     return () => { active = false; };
-  }, [groupId, lat, lng, firebaseReady, geo.requestLocation, focusMap]);
-  useEffect(() => {
-    if (!lat || !lng) return;
+  }, [groupId, lat, lng, firebaseReady, requestLocation, focusMap]);
+  // A shared location in the link centers the map, on arrival and whenever it changes.
+  const linkedKey = lat && lng ? `${lat},${lng}` : null;
+  const [focusedLink, setFocusedLink] = useState<string | null>(null);
+  if (linkedKey !== focusedLink) {
+    setFocusedLink(linkedKey);
     const next = { lat: Number(lat), lng: Number(lng) };
-    if (isValidLocation(next)) focusMap(next);
-  }, [lat, lng, focusMap]);
+    if (linkedKey && isValidLocation(next)) { setCenter(next); setCenterRevision(value => value + 1); }
+  }
+  const groupVisibility = group?.visibility;
+  if (useKeyChange(`${groupId}:${uid}:${firebaseReady}:${group?.id}:${groupVisibility}:${joined}:${revision}`)) { setGroupPosts([]); setGroupError(''); }
   useEffect(() => {
-    setGroupPosts([]); setGroupError('');
-    if (!groupId || !currentUser || !firebaseReady || !group || (group.visibility === 'private' && !joined)) return;
+    if (!groupId || !uid || !firebaseReady || !groupVisibility || (groupVisibility === 'private' && !joined)) return;
     let positioned = false;
     return subscribeGroupPosts(groupId, next => {
       setGroupPosts(next);
       // Keep the group map centered on its pins when the device location arrives.
       if (!positioned && next.length) { positioned = true; focusMap({ lat: next[0].lat, lng: next[0].lng }); }
-    }, () => setGroupError('그룹 핀을 불러오지 못했습니다.'), group.visibility);
-  }, [groupId, currentUser?.uid, firebaseReady, group?.id, group?.visibility, joined, revision, focusMap]);
+    }, () => setGroupError('그룹 핀을 불러오지 못했습니다.'), groupVisibility);
+  }, [groupId, uid, firebaseReady, group?.id, groupVisibility, joined, revision, focusMap]);
   const { ids: blockedIds } = useBlockedUsers();
   const visibleGroupPosts = useMemo(() => withoutBlocked(groupPosts, blockedIds), [groupPosts, blockedIds]);
   const shown = firebaseReady ? (groupId ? visibleGroupPosts : posts) : EMPTY_POSTS;
   // Drop a preview immediately if membership or visibility removes its record.
-  useEffect(() => {
+  const [syncedPosts, setSyncedPosts] = useState(shown);
+  if (shown !== syncedPosts) {
+    setSyncedPosts(shown);
     setSelectedPost(previous => previous ? shown.find(post => post.id === previous.id) || null : null);
     setCluster(previous => previous.map(item => shown.find(post => post.id === item.id)).filter((item): item is Post => !!item));
-  }, [shown]);
+  }
 
   const photoPinLocation = photoFlow?.step === 'confirm' ? photoFlow.summary?.location ?? null : null;
   const placeSheetOpen = !!selectedPlace && !photoFlow && !searchOpen;
@@ -136,9 +146,9 @@ function ScopedMap({ groupId, lat, lng }: { groupId: string; lat?: string; lng?:
   useHideBottomNav('map-sheet', !wide && (!!photoFlow || placeSheetOpen));
 
   const closePhotoRecord = useCallback(() => {
-    photoRecord.close();
+    closeFlow();
     setPhotoRecordPrefill(null);
-  }, [photoRecord.close]);
+  }, [closeFlow]);
 
   // The record form reports back here: a saved record or a request to move the photo pin.
   const recordEvents = useRef<(event: MapRecordEvent) => void>(() => undefined);

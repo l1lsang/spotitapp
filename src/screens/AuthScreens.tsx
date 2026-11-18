@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 import { ActivityIndicator, Image, Linking, Platform, Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { Text } from '../components/Typography';
 import { FormScrollView } from '../components/keyboard'
@@ -162,7 +162,12 @@ export function SignupScreen() {
   const lock = useRef(false)
 
   const initialNickname = profile?.onboardingComplete === false && currentUser?.displayName ? currentUser.displayName : profile?.nickname
-  useEffect(() => { if (initialNickname) setNickname(previous => previous || initialNickname) }, [initialNickname])
+  // The account's name fills an empty nickname field, including when it arrives after the first render.
+  const [prefilledNickname, setPrefilledNickname] = useState('')
+  if (initialNickname && initialNickname !== prefilledNickname) {
+    setPrefilledNickname(initialNickname)
+    setNickname(previous => previous || initialNickname)
+  }
   // Validate once the date is complete so typing a partial date stays quiet.
   const birthError = requirements.birthDate.length === 10 ? getBirthDateError(requirements.birthDate) : ''
   const photoUri = photo?.uri || profile?.photoURL || currentUser?.photoURL || ''

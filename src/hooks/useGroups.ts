@@ -2,22 +2,21 @@ import { useEffect, useState } from 'react'
 import { subscribeGroup, subscribeGroups, subscribeMyGroupIds } from '../services/groupService'
 import type { PinGroup } from '../types/group'
 import { useAuth } from './useAuth'
+import { useKeyChange } from './useKeyChange'
 
 export function useGroups(enabled = true) {
   const { currentUser, accountReady: firebaseReady } = useAuth()
   const uid = currentUser?.uid
   const [groups, setGroups] = useState<PinGroup[]>([])
   const [joinedIds, setJoinedIds] = useState<string[]>([])
-  const [loading, setLoading] = useState(true)
+  const [subscribing, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [revision, setRevision] = useState(0)
+  const loading = enabled && !!uid && firebaseReady && subscribing
+  if (useKeyChange(`${uid}:${firebaseReady}:${enabled}:${revision}`)) { setGroups([]); setJoinedIds([]); setError(''); setLoading(true) }
 
   useEffect(() => {
-    setGroups([])
-    setJoinedIds([])
-    setError('')
-    if (!enabled || !uid || !firebaseReady) { setLoading(false); return }
-    setLoading(true)
+    if (!enabled || !uid || !firebaseReady) return
     let groupsReady = false
     let membershipsReady = false
     let publicGroups: PinGroup[] = []

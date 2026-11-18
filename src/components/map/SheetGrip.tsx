@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Animated, Easing, PanResponder, StyleSheet, View, type GestureResponderHandlers, type LayoutChangeEvent } from 'react-native';
 import { p } from '../ui';
 
@@ -14,7 +14,9 @@ export function useSheetDismiss(onDismiss: () => void) {
   const live = useRef({ height: 0, mounted: true, onDismiss });
   useEffect(() => { live.current.onDismiss = onDismiss; }, [onDismiss]);
   useEffect(() => { const state = live.current; state.mounted = true; return () => { state.mounted = false; }; }, []);
-  const panHandlers = useMemo<GestureResponderHandlers>(() => {
+  // The handlers read `live` only during a gesture; PanResponder.create does not call them.
+  // eslint-disable-next-line react-hooks/refs
+  const [panHandlers] = useState<GestureResponderHandlers>(() => {
     const settle = () => Animated.spring(translateY, { toValue: 0, useNativeDriver: true, bounciness: 0, speed: 18 }).start();
     return PanResponder.create({
       onStartShouldSetPanResponder: () => true,
@@ -30,7 +32,7 @@ export function useSheetDismiss(onDismiss: () => void) {
       },
       onPanResponderTerminate: settle,
     }).panHandlers;
-  }, [translateY]);
+  });
   return {
     panHandlers,
     style: { transform: [{ translateY }] },

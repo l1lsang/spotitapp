@@ -5,7 +5,8 @@ import { Text, TextInput } from '../components/Typography';
 import { RemoteImage } from '../components/RemoteImage';
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router'
-import { Heart, MessageCircle, X } from 'lucide-react-native'
+import * as Clipboard from 'expo-clipboard'
+import { Copy, Heart, MessageCircle, X } from 'lucide-react-native'
 import { Button, Empty, Notice, Screen, p } from '../components/ui'
 import NativeMap from '../components/NativeMap'
 import { FormScrollView } from '../components/keyboard'
@@ -16,9 +17,11 @@ import { PostActionsMenu } from '../components/PostActionsMenu'
 import { CommentThread } from '../components/CommentThread'
 import { useAuth } from '../hooks/useAuth'
 import { useBlockedUsers } from '../hooks/useBlockedUsers'
+import { useKeyChange } from '../hooks/useKeyChange'
 import { unblockUser } from '../services/blockService'
 import { formatDateKey, formatTimestamp } from '../lib/date'
 import { getExternalMapUrl, isValidLocation } from '../lib/mapLocation'
+import { getPlaceCopyText } from '../lib/placeCopy'
 import { getPostById, deletePost } from '../services/postService'
 import { subscribeToLikeStatus, subscribeToPostReactions, togglePostLike } from '../services/likeService'
 import type { Post } from '../types/post'
@@ -51,6 +54,8 @@ export default function PostDetailScreen() {
   const [galleryWidth, setGalleryWidth] = useState(0)
   const [counts, setCounts] = useState({ likeCount: 0, commentCount: 0 })
   const [revision, setRevision] = useState(0)
+  // The copy result belongs to the pin it was shown for.
+  const [placeNotice, setPlaceNotice] = useState({ postId: '', text: '' })
   const request = useRef(0)
   const likePending = useRef(false)
   const scroll = useRef<ScrollView>(null)
@@ -72,9 +77,10 @@ export default function PostDetailScreen() {
   }, [firebaseReady, postId, uid])
   useFocusEffect(useCallback(() => { void load(); return () => { request.current += 1 } }, [load]))
 
+  const reactionsKey = post?.id && uid && firebaseReady ? `${post.id}:${uid}:${revision}` : ''
+  if (useKeyChange(reactionsKey) && reactionsKey) { setLikeReady(false); setLiked(false); setAvailable(true); setActionError('') }
   useEffect(() => {
     if (!post?.id || !uid || !firebaseReady) return
-    setLikeReady(false); setLiked(false); setAvailable(true); setActionError('')
     const unsubscribers: (() => void)[] = []
     const fail = (e: Error) => { setAvailable(false); setActionError(errorMessage(e)) }
     try {
@@ -83,13 +89,22 @@ export default function PostDetailScreen() {
         else { setAvailable(false); setActionError('삭제된 기록입니다.') }
       }, fail))
       unsubscribers.push(subscribeToLikeStatus(post.id, uid, next => { setLiked(next); setLikeReady(true) }, fail))
-    } catch (e) { setAvailable(false); setActionError(errorMessage(e)) }
+    } catch (e) {
+      // A setup failure is reported like a snapshot error, after this effect returns.
+      let active = true
+      void Promise.resolve().then(() => { if (active) fail(e instanceof Error ? e : new Error(String(e))) })
+      unsubscribers.push(() => { active = false })
+    }
     return () => { unsubscribers.forEach(stop => stop()) }
   }, [post?.id, uid, firebaseReady, revision])
   const jump = useCallback((target: View) => {
     if (!content.current) return
     target.measureLayout(content.current, (_x, y) => scroll.current?.scrollTo({ y: Math.max(0, y - 20), animated: true }), () => scroll.current?.scrollTo({ y: commentsPosition.current, animated: true }))
   }, [])
+  async function copyPlace(id: string, text: string) {
+    try { await Clipboard.setStringAsync(text); setPlaceNotice({ postId: id, text: '주소를 복사했습니다.' }) }
+    catch { setPlaceNotice({ postId: id, text: '복사하지 못했습니다. 다시 시도해 주세요.' }) }
+  }
   async function toggleLike() {
     if (!currentUser || !profile) { router.push('/login'); return }
     if (!post || !available || !likeReady || likePending.current) return
@@ -150,6 +165,7 @@ export default function PostDetailScreen() {
     {available && <View style={styles.comments} onLayout={event => { commentsPosition.current = event.nativeEvent.layout.y; }}><CommentThread key={post.id + '-' + uid} post={post} commentId={commentId} replyId={replyId} onJump={jump} inputRef={commentInput} /></View>}
   </View>
 
+  const placeCopyText = getPlaceCopyText(post)
   // The place and record panels sit beside the record on wide screens and after it on phones.
   const aside = <View style={[styles.aside, wide && styles.asideWide]}>
     <View style={styles.panel}>
@@ -157,6 +173,8 @@ export default function PostDetailScreen() {
       <Text style={styles.panelText}>{post.address || post.placeName}</Text>
       <Text style={styles.small}>좌표 {post.lat.toFixed(5)}, {post.lng.toFixed(5)}</Text>
       <Text accessibilityRole="link" style={styles.mapLink} onPress={() => void Linking.openURL(getExternalMapUrl(post)).catch(e => setActionError(errorMessage(e)))}>지도에서 위치 열기</Text>
+      {!!placeCopyText && <Button title="주소 복사" variant="secondary" icon={<Copy size={16} color={p.ink} />} style={styles.copyPlace} onPress={() => void copyPlace(post.id, placeCopyText)} />}
+      {placeNotice.postId === post.id && !!placeNotice.text && <Text accessibilityLiveRegion="polite" style={styles.small}>{placeNotice.text}</Text>}
       <DirectionsButton destination={post} placeName={post.placeName} />
     </View>
     {isValidLocation(post) && <View style={styles.map}><NativeMap key={post.id + '-' + post.lat + '-' + post.lng} center={{ lat: post.lat, lng: post.lng }} posts={[post]} bottomInset={0} onPick={() => {}} onSelect={() => {}} /></View>}
@@ -204,7 +222,7 @@ const styles = StyleSheet.create({
   aside: { gap: 14 }, asideWide: { width: 340 },
   panel: { padding: 16, gap: 8, borderRadius: 6, borderWidth: 1, borderColor: p.line, backgroundColor: p.paper },
   panelTitle: { color: p.ink, fontSize: 16.8, fontWeight: '600', marginBottom: 2 }, panelText: { color: p.ink, fontSize: 16, lineHeight: 24.8 }, small: { color: p.muted, fontSize: 13, lineHeight: 20 },
-  mapLink: { marginTop: 4, color: p.primary, fontSize: 14.4, textDecorationLine: 'underline' }, author: { color: p.primary, fontWeight: '600' },
+  mapLink: { marginTop: 4, color: p.primary, fontSize: 14.4, textDecorationLine: 'underline' }, copyPlace: { alignSelf: 'flex-start' }, author: { color: p.primary, fontWeight: '600' },
   map: { height: 260, overflow: 'hidden', borderRadius: 6, borderWidth: 1, borderColor: p.line, backgroundColor: p.surface },
   iconButton: { padding: 9 }, viewer: { flex: 1, backgroundColor: p.viewer }, viewerHeader: { paddingHorizontal: 18, paddingVertical: 9, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, viewerCount: { color: '#FFFFFF', fontSize: 14 },
 })

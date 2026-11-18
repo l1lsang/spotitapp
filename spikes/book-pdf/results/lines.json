@@ -1,0 +1,20 @@
+{
+  "char": {
+    "texts": 301,
+    "sameAsChromium": 301,
+    "pdflibMore": 0,
+    "pdflibFewer": 0,
+    "longerThanAppEstimate": 0,
+    "differences": []
+  },
+  "keep-all": {
+    "texts": 301,
+    "sameAsChromium": 301,
+    "pdflibMore": 0,
+    "pdflibFewer": 0,
+    "longerThanAppEstimate": 0,
+    "differences": []
+  },
+  "keepAllAddsLines": 0,
+  "keepAllExtraLines": 0
+}

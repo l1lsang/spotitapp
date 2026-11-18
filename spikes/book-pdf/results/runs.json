@@ -1,0 +1,15 @@
+{
+  "machine": "Windows 11, Node 26.7 (Functions run Node 24), Chrome 158 (local, not @sparticuz/chromium)",
+  "book": "200 pages, 245 placed photos (149 unique 1600px JPEG, 45 MB), 301 text boxes in 3 fonts",
+  "pdflib": [
+    { "mode": "char", "seconds": 1.6, "peakRssMB": 279, "sizeMB": 43.7, "fontSubset": true },
+    { "mode": "keep-all", "seconds": 1.6, "peakRssMB": 279, "sizeMB": 43.7, "fontSubset": true },
+    { "mode": "char", "seconds": 11.7, "peakRssMB": 383, "sizeMB": 47.8, "fontSubset": false, "note": "before the line-breaking fix (O(n^2) shaping took 98% of the time)" },
+    { "mode": "char", "fork": "@pdf-lib/fontkit", "error": "Not a CFF Font (Pretendard-Regular.otf)" }
+  ],
+  "chromium": [
+    { "mode": "char", "seconds": 19.4, "layoutSeconds": 0.7, "printSeconds": 17.1, "boxSeconds": 1.6, "chromePeakMB": 600, "nodeRssMB": 242, "sizeMB": 43.9 },
+    { "mode": "keep-all", "seconds": 19.7, "printSeconds": 17.3, "chromePeakMB": 620, "nodeRssMB": 238, "sizeMB": 43.9 },
+    { "mode": "char", "seconds": 195.1, "boxSeconds": 177.0, "note": "pdf-lib default parse/save speed when adding TrimBox; fixed with ParseSpeeds.Fastest and objectsPerTick: Infinity" }
+  ]
+}

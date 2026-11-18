@@ -18,7 +18,6 @@ export function AppUpdatePrompt() {
     mounted.current = true
     return () => { mounted.current = false }
   }, [])
-  useEffect(() => { setError(null) }, [release?.version, release?.url])
 
   function dismiss(version: string) {
     setDismissedVersions(previous => new Set(previous).add(version))
