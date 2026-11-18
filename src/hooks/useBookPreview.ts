@@ -2,10 +2,11 @@ import { useEffect, useState } from 'react'
 import type { BookDraft } from '../types/book'
 import { loadBookLocal } from '../services/bookDraftStorage'
 import { loadBook } from '../services/bookService'
+import { saveStateOf, type SaveState } from '../lib/book/render'
 
 type PreviewState =
   | { phase: 'loading' }
-  | { phase: 'ready'; draft: BookDraft }
+  | { phase: 'ready'; draft: BookDraft; save: SaveState }
   | { phase: 'blocked'; reason: 'deleted' | 'newer' | 'failed' }
 
 /**
@@ -19,10 +20,10 @@ export function useBookPreview(uid: string, bookId: string): PreviewState {
     let active = true
     loadBookLocal(uid, bookId)
       .then(async local => {
-        if (local.draft.status === 'ok') return { phase: 'ready', draft: local.draft.draft } as const
+        if (local.draft.status === 'ok') return { phase: 'ready', draft: local.draft.draft, save: saveStateOf(local.draft.draft, local.sync) } as const
         if (local.draft.status === 'newer') return { phase: 'blocked', reason: 'newer' } as const
         const server = await loadBook(uid, bookId)
-        if (server.kind === 'ok') return { phase: 'ready', draft: server.draft } as const
+        if (server.kind === 'ok') return { phase: 'ready', draft: server.draft, save: { kind: 'saved', revision: server.revision } } as const
         return { phase: 'blocked', reason: server.kind === 'missing' ? 'deleted' : 'newer' } as const
       })
       .then(next => { if (active) setState(next) })
