@@ -13,7 +13,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     ...config,
     name: "피노리",
     slug: "spotit",
-    version: "1.0.15",
+    version: "1.0.16",
     orientation: "portrait",
     scheme: "spotit",
     userInterfaceStyle: "light",
