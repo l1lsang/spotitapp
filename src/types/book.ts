@@ -34,7 +34,7 @@ export interface BookImageElement extends BookElementBase {
   crop: { x: number; y: number; w: number; h: number }
 }
 
-export type BookFontId = 'pretendard'
+export type BookFontId = 'pretendard' | 'gowun-batang' | 'nanum-pen'
 
 export interface BookTextElement extends BookElementBase {
   type: 'text'
@@ -49,9 +49,17 @@ export interface BookTextElement extends BookElementBase {
 
 export type BookElement = BookImageElement | BookTextElement
 
+export type BookBackgroundPattern = 'grid' | 'lined'
+
+export interface BookBackground {
+  color: string
+  /** Printed lines over the colour, spaced in millimetres by the renderer. */
+  pattern?: BookBackgroundPattern
+}
+
 export interface BookPage {
   id: string
-  background: { color: string }
+  background: BookBackground
   /** Drawing order: the last element is on top. */
   elements: BookElement[]
 }

@@ -19,6 +19,7 @@ import { policyNavigation, type PolicyId } from '../lib/policyNavigation'
 import { policies, policyOperator, policyPublication, type PolicyDocument, type PolicySection } from '../data/policies'
 import licenses from '../data/openSourceLicenses.json'
 import fontLicense from '../data/fontLicense.json'
+import bookFontLicenses from '../data/bookFontLicenses.json'
 import { markAllNotificationsAsRead, markNotificationAsRead, subscribeToNotifications } from '../services/notificationService'
 import { disablePushNotifications, enablePushNotifications, getPushPermissionStatus, type PushPermissionStatus } from '../services/pushNotificationService'
 import { getAdminStats, listAdminCases, listMyCases, loginAdmin, logoutAdmin, manageAdminUser, reviewCase, searchAdminUsers, submitInquiry, type AdminStats } from '../services/moderationService'
@@ -520,8 +521,8 @@ function PolicySectionView({ section }: { section: PolicySection }) {
 }
 
 const scopeLabels: Record<string, string> = { app: '앱', server: '서버', development: '개발 도구' }
-const licenseTexts: Record<string, string> = { ...licenses.texts, pretendard: fontLicense.text }
-const licensePackages = [...licenses.packages, fontLicense.package]
+const licenseTexts: Record<string, string> = { ...licenses.texts, pretendard: fontLicense.text, ...bookFontLicenses.texts }
+const licensePackages = [...licenses.packages, fontLicense.package, ...bookFontLicenses.packages]
 type LicensePackage = typeof licenses.packages[number]
 function LicenseItem({ entry, first, last }: { entry: LicensePackage; first: boolean; last: boolean }) {
   const [expanded, setExpanded] = useState(false)

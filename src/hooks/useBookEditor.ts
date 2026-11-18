@@ -3,27 +3,33 @@ import { AppState } from 'react-native'
 import { randomUUID } from 'expo-crypto'
 import type { BookDraft } from '../types/book'
 import { createEmptyDraft } from '../lib/book/draft'
-import { createEditorState, editorReducer, type EditorAction, type EditorState } from '../lib/book/editor'
+import { createEditorState } from '../lib/book/editor'
+import { canRedo, canUndo, createHistory, historyReducer, type HistoryAction, type HistoryState } from '../lib/book/history'
 import { createSaveQueue, type SaveStatus } from '../lib/book/saveQueue'
-import { loadBookDraft, saveBookDraft } from '../services/bookDraftStorage'
+import { loadBookDraft, removeBookDraft, saveBookDraft } from '../services/bookDraftStorage'
+
+export type BlockedReason = 'newer' | 'unreadable' | 'failed'
 
 type Holder =
   | { phase: 'loading' }
-  | { phase: 'failed'; message: string }
-  | { phase: 'ready'; editor: EditorState; loaded: BookDraft }
-type HolderAction = EditorAction | { type: 'loaded'; draft: BookDraft } | { type: 'load-failed'; message: string }
+  | { phase: 'blocked'; reason: BlockedReason }
+  | { phase: 'ready'; history: HistoryState; loaded: BookDraft }
+type HolderAction = HistoryAction | { type: 'loaded'; draft: BookDraft } | { type: 'blocked'; reason: BlockedReason }
 
 function holderReducer(holder: Holder, action: HolderAction): Holder {
-  if (action.type === 'loaded') return { phase: 'ready', editor: createEditorState(action.draft), loaded: action.draft }
-  if (action.type === 'load-failed') return { phase: 'failed', message: action.message }
+  if (action.type === 'loaded') return { phase: 'ready', history: createHistory(createEditorState(action.draft)), loaded: action.draft }
+  if (action.type === 'blocked') return { phase: 'blocked', reason: action.reason }
   if (holder.phase !== 'ready') return holder
-  const editor = editorReducer(holder.editor, action)
-  return editor === holder.editor ? holder : { ...holder, editor }
+  const history = historyReducer(holder.history, action)
+  return history === holder.history ? holder : { ...holder, history }
 }
 
+const emptyDraft = (bookId: string) => createEmptyDraft(bookId, randomUUID(), new Date().toISOString())
+
 /**
- * One book's editing state, restored from this device and saved back to it a
- * moment after every change. The parent remounts it (key) when the book changes.
+ * One book's editing state with undo, restored from this device and saved back to it
+ * a moment after every change. A stored draft this app cannot read is never replaced
+ * without the user's say. The parent remounts it (key) when the book changes.
  */
 export function useBookEditor(uid: string, bookId: string) {
   const [holder, dispatch] = useReducer(holderReducer, { phase: 'loading' })
@@ -37,12 +43,17 @@ export function useBookEditor(uid: string, bookId: string) {
   useEffect(() => {
     let active = true
     loadBookDraft(uid, bookId)
-      .then(draft => { if (active) dispatch({ type: 'loaded', draft: draft ?? createEmptyDraft(bookId, randomUUID(), new Date().toISOString()) }) })
-      .catch(() => { if (active) dispatch({ type: 'load-failed', message: '이 기기에 저장된 책을 열지 못했어요. 앱을 다시 열어 주세요.' }) })
+      .then(stored => {
+        if (!active) return
+        if (stored.status === 'ok') dispatch({ type: 'loaded', draft: stored.draft })
+        else if (stored.status === 'missing') dispatch({ type: 'loaded', draft: emptyDraft(bookId) })
+        else dispatch({ type: 'blocked', reason: stored.status })
+      })
+      .catch(() => { if (active) dispatch({ type: 'blocked', reason: 'failed' }) })
     return () => { active = false }
   }, [uid, bookId])
 
-  const draft = holder.phase === 'ready' ? holder.editor.draft : null
+  const draft = holder.phase === 'ready' ? holder.history.editor.draft : null
   const loaded = holder.phase === 'ready' ? holder.loaded : null
   useEffect(() => {
     // The draft just read from storage is already saved; only edits are queued.
@@ -54,11 +65,19 @@ export function useBookEditor(uid: string, bookId: string) {
     return () => { subscription.remove(); void queue.flush() }
   }, [queue])
 
+  const history = holder.phase === 'ready' ? holder.history : null
   return {
-    editor: holder.phase === 'ready' ? holder.editor : null,
-    loadError: holder.phase === 'failed' ? holder.message : '',
-    dispatch: dispatch as (action: EditorAction) => void,
+    editor: history?.editor ?? null,
+    canUndo: history ? canUndo(history) : false,
+    canRedo: history ? canRedo(history) : false,
+    blocked: holder.phase === 'blocked' ? holder.reason : null,
+    dispatch: dispatch as (action: HistoryAction) => void,
     saveStatus,
     retrySave: () => { void queue.flush() },
+    /** Drops a stored draft that cannot be read and starts an empty one. */
+    discardAndStart: async () => {
+      await removeBookDraft(uid, bookId)
+      dispatch({ type: 'loaded', draft: emptyDraft(bookId) })
+    },
   }
 }

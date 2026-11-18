@@ -5,6 +5,7 @@ import { RemoteImage } from '../RemoteImage'
 import { p } from '../ui'
 import type { BookElement } from '../../types/book'
 import { elementBoxPx, MM_PER_PT, type PageLayout } from '../../lib/book/geometry'
+import { getBookFont } from '../../lib/book/styles'
 
 /** A gesture in progress, drawn on top of the stored element until it is committed. */
 export interface LiveTransform {
@@ -21,6 +22,32 @@ export function liveKey(element: BookElement): string {
   return `${element.id}:${element.xMm}:${element.yMm}:${element.wMm}:${element.hMm}:${element.rotationDeg}:${size}`
 }
 
+/** What an element shows, at the given scale. Thumbnails use the small photo. */
+function ElementContent({ element, layout, thumb, onLayout }: { element: BookElement; layout: PageLayout; thumb: boolean; onLayout?: (event: LayoutChangeEvent) => void }) {
+  if (element.type === 'image') {
+    const uri = thumb ? element.ref.thumbUrl || element.ref.url : element.ref.url
+    return <RemoteImage uri={uri} contentFit="cover" style={StyleSheet.absoluteFill} accessibilityIgnoresInvertColors />
+  }
+  const family = getBookFont(element.font).family
+  const fontSize = element.sizePt * MM_PER_PT * layout.scale
+  return <Text onLayout={onLayout} style={{
+    width: element.wMm * layout.scale,
+    color: element.color,
+    textAlign: element.align,
+    fontSize,
+    lineHeight: fontSize * element.lineHeight,
+    ...(family ? { fontFamily: family } : {}),
+  }}>{element.text}</Text>
+}
+
+/** A still element, for thumbnails and previews. */
+export function StaticElementView({ element, layout }: { element: BookElement; layout: PageLayout }) {
+  return <View pointerEvents="none" style={[styles.element, elementBoxPx(element, layout), { transform: [{ rotate: `${element.rotationDeg}deg` }] }]}>
+    <ElementContent element={element} layout={layout} thumb />
+  </View>
+}
+
+/** An element on the editing canvas, following the gesture that is moving it. */
 export function BookElementView({ element, layout, selected, live, onTextHeight }: {
   element: BookElement
   layout: PageLayout
@@ -28,7 +55,6 @@ export function BookElementView({ element, layout, selected, live, onTextHeight 
   live: SharedValue<LiveTransform | null>
   onTextHeight: (id: string, hMm: number) => void
 }) {
-  const box = elementBoxPx(element, layout)
   const key = liveKey(element)
   const rotation = element.rotationDeg
   // Once the committed element arrives its key changes, so the gesture's overlay
@@ -50,16 +76,8 @@ export function BookElementView({ element, layout, selected, live, onTextHeight 
     if (element.type === 'text') onTextHeight(element.id, event.nativeEvent.layout.height / layout.scale)
   }
 
-  return <Animated.View pointerEvents="none" style={[styles.element, box, animated]}>
-    {element.type === 'image'
-      ? <RemoteImage uri={element.ref.url} contentFit="cover" style={StyleSheet.absoluteFill} accessibilityIgnoresInvertColors />
-      : <Text onLayout={onLayout} style={{
-          width: box.width,
-          color: element.color,
-          textAlign: element.align,
-          fontSize: element.sizePt * MM_PER_PT * layout.scale,
-          lineHeight: element.sizePt * MM_PER_PT * layout.scale * element.lineHeight,
-        }}>{element.text}</Text>}
+  return <Animated.View pointerEvents="none" style={[styles.element, elementBoxPx(element, layout), animated]}>
+    <ElementContent element={element} layout={layout} thumb={false} onLayout={onLayout} />
     {selected && <View style={styles.selection} />}
   </Animated.View>
 }

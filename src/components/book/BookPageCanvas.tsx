@@ -7,6 +7,7 @@ import type { BookSpec } from '../../lib/book/specs'
 import { applyTransform, fitPageLayout, hitTest, pagePxToMm, type ElementTransform } from '../../lib/book/geometry'
 import { createGestureSession, type GestureFrame } from '../../lib/book/gestureSession'
 import { BookElementView, liveKey, type LiveTransform } from './BookElementView'
+import { PageBackground } from './PageBackground'
 
 const WORKSPACE_PADDING = 20
 
@@ -99,6 +100,7 @@ export function BookPageCanvas({ page, spec, selectedId, showGuides, onSelect, o
   return <GestureDetector gesture={gesture}>
     <View style={styles.workspace} onLayout={onLayout} accessibilityLabel="책 페이지 편집 영역">
       {area.width > 0 && <View style={[styles.page, { left: pageLeft, top: pageTop, width: layout.widthPx, height: layout.heightPx, backgroundColor: page.background.color }]}>
+        <PageBackground background={page.background} layout={layout} trim={spec.trimMm} />
         {page.elements.map(element => <BookElementView key={element.id} element={element} layout={layout} selected={element.id === selectedId} live={live} onTextHeight={onTextHeight} />)}
         {showGuides && <>
           <View pointerEvents="none" style={[styles.trim, { top: bleed, left: bleed, right: bleed, bottom: bleed }]} />
