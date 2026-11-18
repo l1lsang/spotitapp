@@ -109,11 +109,17 @@ function Editor({ photo: input, onClose, onSave, square = false }: PhotoEditorPr
       const originY = Math.round(clamp((photo.height - height) / 2 * (1 - pan.y), 0, photo.height - height))
       const context = ImageManipulator.manipulate(photo.uri)
       context.crop({ originX, originY, width, height })
-      const maxDimension = square ? 768 : 2048
-      if (Math.max(width, height) > maxDimension) context.resize(width > height ? { width: maxDimension } : { height: maxDimension })
+      // Profile photos are small squares (uploaded at 384px). Other photos stay full size
+      // and lossless, so the upload encodes each stored copy once from this file.
+      if (square && width > 768) context.resize({ width: 768 })
       const rendered = await context.renderAsync()
-      const result = await rendered.saveAsync({ format: SaveFormat.JPEG, compress: 0.94 })
-      onSave({ ...result, name: 'edited-photo.jpg', mimeType: 'image/jpeg' })
+      if (square) {
+        const result = await rendered.saveAsync({ format: SaveFormat.JPEG, compress: 0.94 })
+        onSave({ ...result, name: 'edited-photo.jpg', mimeType: 'image/jpeg' })
+      } else {
+        const result = await rendered.saveAsync({ format: SaveFormat.PNG })
+        onSave({ ...result, name: 'edited-photo.png', mimeType: 'image/png' })
+      }
     } catch { setError('사진을 편집하지 못했습니다. 다른 사진을 선택하거나 다시 시도해 주세요.') }
     finally { actionLock.current = false; setBusy(false) }
   }

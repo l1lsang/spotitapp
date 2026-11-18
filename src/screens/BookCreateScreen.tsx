@@ -11,6 +11,7 @@ import { BookCover, COVER_STYLES } from '../components/book/BookCover'
 import { useAuth } from '../hooks/useAuth'
 import { getUserPosts } from '../services/postService'
 import { measurePhotos } from '../services/bookPhotoService'
+import { printPxOf } from '../lib/photoPrint'
 import { createBook, newBookId } from '../services/bookService'
 import { getPostCoverThumbnail, type Post } from '../types/post'
 import type { BookCoverStyle, BookDraft, BookImageRef } from '../types/book'
@@ -114,7 +115,7 @@ function CreateFlow({ uid }: { uid: string }) {
         post.photoUrls.forEach((url, index) => {
           const size = sizes[cursor++]
           // A photo that cannot be read is left out; the user can add it again in the editor.
-          if (size) photos.push({ postId: post.id, photoIndex: index, url, pxWidth: size.width, pxHeight: size.height, ...(post.photoThumbnailUrls?.[index] ? { thumbUrl: post.photoThumbnailUrls[index] } : {}) })
+          if (size) photos.push({ postId: post.id, photoIndex: index, url, pxWidth: size.width, pxHeight: size.height, ...(post.photoThumbnailUrls?.[index] ? { thumbUrl: post.photoThumbnailUrls[index] } : {}), ...printPxOf(post, index) })
         })
         return { postId: post.id, title: post.title, placeName: post.placeName, dateKey: post.dateKey, content: post.content, photos }
       })

@@ -66,7 +66,11 @@ function readImageRef(ref) {
         return null;
     if (!text(ref.url, 4000) || !/^https?:\/\//.test(ref.url) || !positive(ref.pxWidth) || !positive(ref.pxHeight))
         return null;
-    return { postId: ref.postId, photoIndex: ref.photoIndex, url: ref.url, pxWidth: ref.pxWidth, pxHeight: ref.pxHeight, ...(text(ref.thumbUrl, 4000) ? { thumbUrl: ref.thumbUrl } : {}) };
+    return {
+        postId: ref.postId, photoIndex: ref.photoIndex, url: ref.url, pxWidth: ref.pxWidth, pxHeight: ref.pxHeight,
+        ...(text(ref.thumbUrl, 4000) ? { thumbUrl: ref.thumbUrl } : {}),
+        ...(positive(ref.printPxWidth) && positive(ref.printPxHeight) ? { printPxWidth: ref.printPxWidth, printPxHeight: ref.printPxHeight } : {}),
+    };
 }
 function readElement(raw) {
     if (!isObject(raw) || !isId(raw.id))

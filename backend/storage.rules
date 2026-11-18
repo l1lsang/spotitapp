@@ -38,11 +38,20 @@ service firebase.storage {
       allow create, update: if owner(uid) && completedAccount() && imageWithin(20 * 1024 * 1024);
       allow delete: if owner(uid);
     }
+    // Private print copies of record photos (src/lib/photoPrint.ts): the owner only, never
+    // the pin's viewers. Book printing reads them on the server. Deleting a pin removes
+    // this folder with the rest of posts/{uid}/{postId}/.
+    match /posts/{uid}/{postId}/print/{filename} {
+      allow get: if owner(uid);
+      allow create, update: if owner(uid) && completedAccount() && imageWithin(20 * 1024 * 1024)
+        && request.resource.contentType == 'image/jpeg';
+      allow delete: if owner(uid);
+    }
     match /chats/{chatId}/{uid}/{filename} {
       allow get: if chatMember(chatId);
       allow create, update: if owner(uid) && chatMember(chatId) && imageWithin(20 * 1024 * 1024);
       allow delete: if owner(uid);
     }
-    // No directory listing or writes outside the three documented media paths.
+    // No directory listing or writes outside the documented media paths.
   }
 }

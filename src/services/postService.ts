@@ -36,6 +36,7 @@ import {
 } from '../types/post'
 import { getFollowingIds, isFollowing } from './followService'
 import { uploadPostPhotosWithThumbnails, type UploadPhoto } from './storageService'
+import { keptPhotoPrints } from '../lib/photoPrint'
 import { getUserProfile } from './userService'
 
 interface AuthorInfo {
@@ -233,7 +234,7 @@ export async function createPost(
   const groupId = input.groupId || ''
   const visibility = await getGroupPostVisibility(groupId, input.visibility, author.uid)
   const postRef = doc(collection(db, 'posts'))
-  const photos = files.length > 0 ? await uploadPostPhotosWithThumbnails(author.uid, postRef.id, files) : { photoUrls: [], photoThumbnailUrls: [] }
+  const photos = files.length > 0 ? await uploadPostPhotosWithThumbnails(author.uid, postRef.id, files) : { photoUrls: [], photoThumbnailUrls: [], photoPrints: [] }
 
   await setDoc(postRef, {
     id: postRef.id,
@@ -385,7 +386,7 @@ export async function updatePost(
 
   const groupId = input.groupId ?? post.groupId ?? ''
   const visibility = await getGroupPostVisibility(groupId, input.visibility, uid, post)
-  const uploadedPhotos = files.length > 0 ? await uploadPostPhotosWithThumbnails(uid, postId, files) : { photoUrls: [], photoThumbnailUrls: [] }
+  const uploadedPhotos = files.length > 0 ? await uploadPostPhotosWithThumbnails(uid, postId, files) : { photoUrls: [], photoThumbnailUrls: [], photoPrints: [] }
 
   await updateDoc(doc(requireDb(), 'posts', postId), {
     ...input,
@@ -394,6 +395,7 @@ export async function updatePost(
     pinColor: normalizePinColor(input.pinColor),
     photoUrls: [...existingPhotoUrls, ...uploadedPhotos.photoUrls],
     photoThumbnailUrls: [...existingPhotoUrls.map(url => post.photoThumbnailUrls?.[post.photoUrls.indexOf(url)] || url), ...uploadedPhotos.photoThumbnailUrls],
+    photoPrints: [...keptPhotoPrints(post.photoPrints, existingPhotoUrls), ...uploadedPhotos.photoPrints],
     updatedAt: serverTimestamp(),
   })
   invalidateAppReads()
