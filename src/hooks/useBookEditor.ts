@@ -1,69 +1,85 @@
 import { useEffect, useReducer, useState } from 'react'
 import { AppState } from 'react-native'
-import { randomUUID } from 'expo-crypto'
 import type { BookDraft } from '../types/book'
-import { createEmptyDraft } from '../lib/book/draft'
 import { createEditorState } from '../lib/book/editor'
 import { canRedo, canUndo, createHistory, historyReducer, type HistoryAction, type HistoryState } from '../lib/book/history'
-import { createSaveQueue, type SaveStatus } from '../lib/book/saveQueue'
-import { loadBookDraft, removeBookDraft, saveBookDraft } from '../services/bookDraftStorage'
+import { createBookSession, type BookSaveStatus } from '../lib/book/bookSession'
+import { loadBookLocal, removeBookLocal, saveBookDraft, saveBookSync } from '../services/bookDraftStorage'
+import { isRefusal, loadBook, writeBookChanges } from '../services/bookService'
 
-export type BlockedReason = 'newer' | 'unreadable' | 'failed'
+export type BlockedReason = 'deleted' | 'newer' | 'failed'
 
 type Holder =
   | { phase: 'loading' }
   | { phase: 'blocked'; reason: BlockedReason }
-  | { phase: 'ready'; history: HistoryState; loaded: BookDraft }
-type HolderAction = HistoryAction | { type: 'loaded'; draft: BookDraft } | { type: 'blocked'; reason: BlockedReason }
+  | { phase: 'ready'; history: HistoryState; loaded: BookDraft; conflict: boolean }
+type HolderAction =
+  | HistoryAction
+  | { type: 'loaded'; draft: BookDraft; conflict?: boolean }
+  | { type: 'blocked'; reason: BlockedReason }
+  | { type: 'conflict-resolved'; draft: BookDraft | null }
 
 function holderReducer(holder: Holder, action: HolderAction): Holder {
-  if (action.type === 'loaded') return { phase: 'ready', history: createHistory(createEditorState(action.draft)), loaded: action.draft }
+  if (action.type === 'loaded') return { phase: 'ready', history: createHistory(createEditorState(action.draft)), loaded: action.draft, conflict: !!action.conflict }
   if (action.type === 'blocked') return { phase: 'blocked', reason: action.reason }
   if (holder.phase !== 'ready') return holder
+  if (action.type === 'conflict-resolved') {
+    // Showing the server's copy starts a fresh history: undo must not bring back the other copy.
+    if (action.draft && action.draft !== holder.history.editor.draft) return holderReducer(holder, { type: 'loaded', draft: action.draft })
+    return { ...holder, conflict: false }
+  }
   const history = historyReducer(holder.history, action)
   return history === holder.history ? holder : { ...holder, history }
 }
 
-const emptyDraft = (bookId: string) => createEmptyDraft(bookId, randomUUID(), new Date().toISOString())
-
 /**
- * One book's editing state with undo, restored from this device and saved back to it
- * a moment after every change. A stored draft this app cannot read is never replaced
- * without the user's say. The parent remounts it (key) when the book changes.
+ * One book's editing state with undo. It opens the server copy (or this device's newer
+ * one), saves every change to this device at once and to the server a moment later, and
+ * stops to ask when another device changed the same book. The parent remounts it (key)
+ * when the book changes.
  */
 export function useBookEditor(uid: string, bookId: string) {
   const [holder, dispatch] = useReducer(holderReducer, { phase: 'loading' })
-  const [saveStatus, setSaveStatus] = useState<SaveStatus>('saved')
-  const [queue] = useState(() => createSaveQueue<BookDraft>({
-    delayMs: 600,
-    write: draft => saveBookDraft(uid, draft),
-    onStatus: status => setSaveStatus(status),
+  const [saveStatus, setSaveStatus] = useState<BookSaveStatus>('saved')
+  const [session] = useState(() => createBookSession({
+    local: {
+      load: () => loadBookLocal(uid, bookId),
+      saveDraft: draft => saveBookDraft(uid, draft),
+      saveSync: state => saveBookSync(uid, bookId, state),
+      clear: () => removeBookLocal(uid, bookId),
+    },
+    server: {
+      load: () => loadBook(uid, bookId),
+      write: (draft, plan) => writeBookChanges(bookId, draft, plan),
+    },
+    isRefusal,
+    onStatus: setSaveStatus,
   }))
 
   useEffect(() => {
     let active = true
-    loadBookDraft(uid, bookId)
-      .then(stored => {
+    session.open()
+      .then(result => {
         if (!active) return
-        if (stored.status === 'ok') dispatch({ type: 'loaded', draft: stored.draft })
-        else if (stored.status === 'missing') dispatch({ type: 'loaded', draft: emptyDraft(bookId) })
-        else dispatch({ type: 'blocked', reason: stored.status })
+        if (result.kind === 'blocked') dispatch({ type: 'blocked', reason: result.reason })
+        else if (result.kind === 'conflict') dispatch({ type: 'loaded', draft: result.local, conflict: true })
+        else dispatch({ type: 'loaded', draft: result.draft })
       })
       .catch(() => { if (active) dispatch({ type: 'blocked', reason: 'failed' }) })
     return () => { active = false }
-  }, [uid, bookId])
+  }, [session])
 
   const draft = holder.phase === 'ready' ? holder.history.editor.draft : null
   const loaded = holder.phase === 'ready' ? holder.loaded : null
   useEffect(() => {
-    // The draft just read from storage is already saved; only edits are queued.
-    if (draft && draft !== loaded) queue.schedule(draft)
-  }, [draft, loaded, queue])
+    // The draft just opened is already stored; only edits are sent.
+    if (draft && draft !== loaded) session.edit(draft)
+  }, [draft, loaded, session])
 
   useEffect(() => {
-    const subscription = AppState.addEventListener('change', state => { if (state !== 'active') void queue.flush() })
-    return () => { subscription.remove(); void queue.flush() }
-  }, [queue])
+    const subscription = AppState.addEventListener('change', state => { if (state !== 'active') void session.flush() })
+    return () => { subscription.remove(); void session.flush().finally(() => session.dispose()) }
+  }, [session])
 
   const history = holder.phase === 'ready' ? holder.history : null
   return {
@@ -71,13 +87,21 @@ export function useBookEditor(uid: string, bookId: string) {
     canUndo: history ? canUndo(history) : false,
     canRedo: history ? canRedo(history) : false,
     blocked: holder.phase === 'blocked' ? holder.reason : null,
+    conflict: holder.phase === 'ready' && (holder.conflict || saveStatus === 'conflict'),
     dispatch: dispatch as (action: HistoryAction) => void,
     saveStatus,
-    retrySave: () => { void queue.flush() },
-    /** Drops a stored draft that cannot be read and starts an empty one. */
-    discardAndStart: async () => {
-      await removeBookDraft(uid, bookId)
-      dispatch({ type: 'loaded', draft: emptyDraft(bookId) })
+    retrySave: () => {
+      void session.retry().then(result => {
+        if (result?.kind === 'conflict') dispatch({ type: 'loaded', draft: result.local, conflict: true })
+        else if (result?.kind === 'blocked') dispatch({ type: 'blocked', reason: result.reason })
+        // Back online with the server's copy, because this device had nothing newer.
+        else if (result?.kind === 'ready' && result.draft !== draft) dispatch({ type: 'loaded', draft: result.draft })
+      }).catch(() => undefined)
+    },
+    /** The user's answer when another device changed the book. */
+    resolveConflict: async (keep: 'server' | 'local') => {
+      const next = await session.resolveConflict(keep)
+      dispatch({ type: 'conflict-resolved', draft: keep === 'server' ? next : null })
     },
   }
 }

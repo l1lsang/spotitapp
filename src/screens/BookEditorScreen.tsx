@@ -10,6 +10,7 @@ import {
 } from 'lucide-react-native'
 import { Text } from '../components/Typography'
 import { Button, IconButton, Notice, p } from '../components/ui'
+import { Dialog } from '../components/Dialog'
 import { BookPageCanvas } from '../components/book/BookPageCanvas'
 import { PinPhotoPicker } from '../components/book/PinPhotoPicker'
 import { TextEditDialog } from '../components/book/TextEditDialog'
@@ -20,19 +21,22 @@ import { useBookEditor, type BlockedReason } from '../hooks/useBookEditor'
 import { canAddElement, canAddPage, currentPage, MAX_ELEMENTS_PER_PAGE } from '../lib/book/editor'
 import { NO_TRANSFORM } from '../lib/book/geometry'
 import { getBookSpec } from '../lib/book/specs'
-import type { SaveStatus } from '../lib/book/saveQueue'
+import type { BookSaveStatus } from '../lib/book/bookSession'
 
-const SAVE_LABEL: Record<SaveStatus, string> = {
-  saved: '이 기기에 저장됨',
-  pending: '저장 중…',
+const SAVE_LABEL: Record<BookSaveStatus, string> = {
+  saved: '저장됨',
   saving: '저장 중…',
+  local: '이 기기에만 저장됨',
   error: '저장 안 됨',
+  conflict: '다른 기기에서 수정됨',
+  deleted: '삭제된 책',
 }
+const RETRYABLE: readonly BookSaveStatus[] = ['local', 'error']
 
 const BLOCKED_TEXT: Record<BlockedReason, string> = {
+  deleted: '이 책은 삭제됐어요.',
   newer: '이 책은 더 새로운 버전의 앱에서 저장됐어요. 앱을 업데이트한 뒤 열어 주세요.',
-  unreadable: '이 기기에 저장된 책이 손상돼 열 수 없어요.',
-  failed: '이 기기에 저장된 책을 열지 못했어요. 앱을 다시 열어 주세요.',
+  failed: '책을 불러오지 못했어요. 연결을 확인한 뒤 다시 열어 주세요.',
 }
 
 // Book faces load with the editor only, not at app start.
@@ -52,32 +56,25 @@ export default function BookEditorScreen({ bookId }: { bookId: string }) {
 
 function leave() {
   if (router.canGoBack()) router.back()
-  else router.replace('/my')
+  else router.replace('/books')
 }
 
 function Editor({ uid, bookId }: { uid: string; bookId: string }) {
   const [fontsLoaded, fontError] = useFonts(BOOK_FONT_FILES)
-  const { editor, blocked, dispatch, canUndo, canRedo, saveStatus, retrySave, discardAndStart } = useBookEditor(uid, bookId)
+  const { editor, blocked: openBlocked, conflict, dispatch, canUndo, canRedo, saveStatus, retrySave, resolveConflict } = useBookEditor(uid, bookId)
   const [showGuides, setShowGuides] = useState(true)
   const [picking, setPicking] = useState(false)
   const [textEdit, setTextEdit] = useState<TextEdit | null>(null)
   const [panel, setPanel] = useState<Panel>(null)
-  const [confirmDiscard, setConfirmDiscard] = useState(false)
+  const [resolving, setResolving] = useState(false)
+  const blocked: BlockedReason | null = openBlocked ?? (saveStatus === 'deleted' ? 'deleted' : null)
 
-  if (!editor || (!fontsLoaded && !fontError)) return <SafeAreaView style={styles.screen} edges={['top', 'bottom']}>
+  if (!editor || blocked || (!fontsLoaded && !fontError)) return <SafeAreaView style={styles.screen} edges={['top', 'bottom']}>
     <View style={styles.top}><IconButton label="뒤로 가기" onPress={leave}><ChevronLeft size={22} color={p.ink} /></IconButton></View>
     <View style={styles.center}>
       {blocked ? <View style={styles.blocked}>
         <Notice error>{BLOCKED_TEXT[blocked]}</Notice>
-        {blocked === 'unreadable' && (confirmDiscard
-          ? <>
-            <Text style={styles.blockedText}>지우면 이 기기에 남은 내용은 되찾을 수 없어요.</Text>
-            <View style={styles.blockedActions}>
-              <Button variant="secondary" title="취소" onPress={() => setConfirmDiscard(false)} />
-              <Button variant="danger" title="지우고 새로 시작" onPress={() => { setConfirmDiscard(false); void discardAndStart().catch(() => undefined) }} />
-            </View>
-          </>
-          : <Button variant="secondary" title="지우고 새로 시작하기" onPress={() => setConfirmDiscard(true)} />)}
+        <Button variant="secondary" title="내 책 목록으로" onPress={() => router.replace('/books')} />
       </View> : <ActivityIndicator color={p.primary} />}
     </View>
   </SafeAreaView>
@@ -110,9 +107,10 @@ function Editor({ uid, bookId }: { uid: string; bookId: string }) {
       <IconButton label="뒤로 가기" onPress={leave}><ChevronLeft size={22} color={p.ink} /></IconButton>
       <View style={styles.heading}>
         <Text numberOfLines={1} style={styles.title}>{editor.draft.title || '제목 없는 책'}</Text>
-        <Pressable accessibilityRole="button" disabled={saveStatus !== 'error'} onPress={retrySave} accessibilityLabel={saveStatus === 'error' ? '저장 안 됨, 다시 저장' : SAVE_LABEL[saveStatus]}>
-          <Text numberOfLines={1} style={[styles.status, saveStatus === 'error' && styles.statusError]}>
-            {editor.pageIndex + 1}/{pages.length}쪽 · {SAVE_LABEL[saveStatus]}{saveStatus === 'error' ? ' · 다시 저장' : ''}
+        <Pressable accessibilityRole="button" disabled={!RETRYABLE.includes(saveStatus)} onPress={retrySave}
+          accessibilityLabel={RETRYABLE.includes(saveStatus) ? `${SAVE_LABEL[saveStatus]}, 다시 저장` : SAVE_LABEL[saveStatus]}>
+          <Text numberOfLines={1} style={[styles.status, saveStatus !== 'saved' && saveStatus !== 'saving' && styles.statusError]}>
+            {editor.pageIndex + 1}/{pages.length}쪽 · {SAVE_LABEL[saveStatus]}{RETRYABLE.includes(saveStatus) ? ' · 다시 저장' : ''}
           </Text>
         </Pressable>
       </View>
@@ -179,6 +177,15 @@ function Editor({ uid, bookId }: { uid: string; bookId: string }) {
 
     <PinPhotoPicker uid={uid} visible={picking} onClose={() => setPicking(false)}
       onPick={ref => dispatch({ type: 'add-image', id: randomUUID(), ref, now: now() })} />
+    <Dialog visible={conflict} title="다른 기기에서 이 책을 고쳤어요" onClose={() => undefined} busy>
+      <Text style={styles.blockedText}>어느 쪽을 남길까요? 남기지 않은 쪽에서 고친 내용은 사라져요.</Text>
+      <View style={styles.conflictActions}>
+        <Button variant="secondary" title="다른 기기 내용 불러오기" disabled={resolving}
+          onPress={() => { setResolving(true); void resolveConflict('server').finally(() => setResolving(false)) }} />
+        <Button title="이 기기 내용으로 저장" loading={resolving}
+          onPress={() => { setResolving(true); void resolveConflict('local').finally(() => setResolving(false)) }} />
+      </View>
+    </Dialog>
     {textEdit && <TextEditDialog initialText={textEdit.text} title={textEdit.id ? '글 고치기' : '글 넣기'} onClose={() => setTextEdit(null)} onSave={saveText} />}
   </SafeAreaView>
 }
@@ -196,7 +203,7 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
   blocked: { alignSelf: 'stretch', gap: 12 },
   blockedText: { fontSize: 15, lineHeight: 23, color: p.ink },
-  blockedActions: { flexDirection: 'row', gap: 8, justifyContent: 'flex-end' },
+  conflictActions: { gap: 8 },
   top: { flexDirection: 'row', alignItems: 'center', gap: 0, paddingHorizontal: 4, minHeight: 56, borderBottomWidth: 1, borderColor: p.line },
   heading: { flex: 1, gap: 1, paddingLeft: 2 },
   title: { fontSize: 16, fontWeight: '600', color: p.ink },

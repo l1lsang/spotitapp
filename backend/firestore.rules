@@ -370,6 +370,65 @@ service cloud.firestore {
       allow create: if isOwner(request.resource.data.uid);
       allow delete: if isOwner(resource.data.uid);
     }
+    // Book Studio drafts (docs/book-feature-design.md, 4.2 and 9): one document per book
+    // and one per page, readable and writable by the author only while the book is a draft.
+    // Every page change travels in a batch that raises the book's revision by exactly one,
+    // so a device still editing an older revision is refused instead of overwriting.
+    // Photo references are not checked against the author's pins here; the print step
+    // verifies them on the server before anything is rendered or ordered.
+    function bookDoc(bookId) { return /databases/$(database)/documents/books/$(bookId); }
+    function validBookImage(ref) {
+      return ref is map && ref.keys().hasOnly(['postId', 'photoIndex', 'url', 'thumbUrl', 'pxWidth', 'pxHeight'])
+        && ref.keys().hasAll(['postId', 'photoIndex', 'url', 'pxWidth', 'pxHeight'])
+        && ref.postId is string && ref.photoIndex is int && ref.url is string && ref.url.size() <= 4000
+        && ref.pxWidth is number && ref.pxHeight is number;
+    }
+    function validBook(data) {
+      let fields = ['uid', 'title', 'subtitle', 'specId', 'coverStyle', 'coverPhoto', 'pageIds', 'sourcePostIds', 'revision', 'status', 'schemaVersion', 'createdAt', 'updatedAt'];
+      return data.keys().hasOnly(fields) && data.keys().hasAll(fields)
+        && data.title is string && data.title.size() <= 24
+        && data.subtitle is string && data.subtitle.size() <= 40
+        && data.specId == 'a5-soft' && data.coverStyle in ['photo', 'minimal', 'kraft']
+        && (data.coverPhoto == null || validBookImage(data.coverPhoto))
+        && data.pageIds is list && data.pageIds.size() >= 1 && data.pageIds.size() <= 200
+        && data.sourcePostIds is list && data.sourcePostIds.size() <= 200
+        && data.revision is int && data.schemaVersion is int && data.schemaVersion >= 1
+        && data.status == 'draft' && data.updatedAt == request.time;
+    }
+    function validBookPage(data) {
+      return data.keys().hasOnly(['background', 'elements']) && data.keys().hasAll(['background', 'elements'])
+        && data.background is map && data.elements is list && data.elements.size() <= 60;
+    }
+    function ownDraftBook(book) { return book.data.uid == request.auth.uid && book.data.status == 'draft'; }
+    function bookRevisedInBatch(bookId) {
+      return (!exists(bookDoc(bookId)) && getAfter(bookDoc(bookId)).data.revision == 1)
+        || (exists(bookDoc(bookId)) && ownDraftBook(get(bookDoc(bookId)))
+          && getAfter(bookDoc(bookId)).data.revision == get(bookDoc(bookId)).data.revision + 1);
+    }
+    match /books/{bookId} {
+      // A missing book reads as missing, so another device can tell it was deleted.
+      allow get: if active() && (resource == null || request.auth.uid == resource.data.uid);
+      allow list: if isOwner(resource.data.uid);
+      allow create: if isOwner(request.resource.data.uid) && validBook(request.resource.data)
+        && request.resource.data.revision == 1 && request.resource.data.createdAt == request.time;
+      allow update: if isOwner(resource.data.uid) && resource.data.status == 'draft'
+        && validBook(request.resource.data)
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.revision == resource.data.revision + 1;
+      allow delete: if isOwner(resource.data.uid) && resource.data.status == 'draft';
+      match /pages/{pageId} {
+        allow read: if isOwner(get(bookDoc(bookId)).data.uid);
+        allow create, update: if active() && validBookPage(request.resource.data)
+          && existsAfter(bookDoc(bookId)) && ownDraftBook(getAfter(bookDoc(bookId)))
+          && pageId in getAfter(bookDoc(bookId)).data.pageIds
+          && bookRevisedInBatch(bookId);
+        // Removed from the page list in a revised batch, or deleted with its whole book.
+        allow delete: if active() && exists(bookDoc(bookId)) && ownDraftBook(get(bookDoc(bookId)))
+          && (!existsAfter(bookDoc(bookId))
+            || (!(pageId in getAfter(bookDoc(bookId)).data.pageIds) && bookRevisedInBatch(bookId)));
+      }
+    }
     // Update notices are available before login; publishing is admin-only.
     match /appReleases/{platform} {
       allow get: if platform in ['android', 'ios'];
