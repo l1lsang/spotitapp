@@ -11,9 +11,12 @@ export interface BookImageRef {
   /** Display copy (`photoUrls[i]`), currently at most 1600px on its long side. */
   url: string
   thumbUrl?: string
-  /** Pixel size of `url`, measured when the photo was placed. Used for print DPI. */
+  /** Pixel size of `url`, measured when the photo was placed. */
   pxWidth: number
   pxHeight: number
+  /** Pixel size of the record's private print copy, when it has one. Print DPI uses it. */
+  printPxWidth?: number
+  printPxHeight?: number
 }
 
 interface BookElementBase {

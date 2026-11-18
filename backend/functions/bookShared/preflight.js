@@ -15,10 +15,14 @@ const MM_PER_INCH = 25.4;
 /** A photo must reach this far past the trim line to count as running into the bleed. */
 const BLEED_REACH_MM = 0.5;
 const round = (value, step = 0.5) => Math.ceil(value / step) * step;
-/** Print resolution of a placed photo: the pixels it shows over the size it prints at. */
+/**
+ * Print resolution of a placed photo: the pixels it shows over the size it prints at.
+ * Photos with a print copy are printed from it, so its larger size counts.
+ */
 function effectiveDpi(element) {
-    const pxW = element.ref.pxWidth * element.crop.w;
-    const pxH = element.ref.pxHeight * element.crop.h;
+    const { ref } = element;
+    const pxW = (ref.printPxWidth ?? ref.pxWidth) * element.crop.w;
+    const pxH = (ref.printPxHeight ?? ref.pxHeight) * element.crop.h;
     return Math.min(pxW / (element.wMm / MM_PER_INCH), pxH / (element.hMm / MM_PER_INCH));
 }
 function photoIssues(element, pageIndex, spec) {
@@ -30,8 +34,8 @@ function photoIssues(element, pageIndex, spec) {
         issues.push({
             id: `photo-resolution:${element.id}`, kind: 'photo-resolution', severity: blocked ? 'error' : 'warn', pageIndex, elementId: element.id,
             title: blocked ? '사진이 너무 크게 놓여 인쇄할 수 없어요' : '사진이 흐릿하게 인쇄돼요',
-            // Every photo so far is the 1600px display copy: no original exists to print sharper.
-            detail: `약 ${dpi}dpi예요(권장 300dpi). 원본이 없어 더 선명하게 만들 수는 없어요. ${blocked ? `${block}dpi 이상이 되도록 ` : ''}작게 놓거나 다른 사진으로 바꿔 주세요.`,
+            // Photos saved before print copies existed only have the 1600px display copy.
+            detail: `약 ${dpi}dpi예요(권장 300dpi). ${element.ref.printPxWidth ? '저장된 가장 큰 사진으로 계산했어요.' : '원본이 없어 더 선명하게 만들 수는 없어요.'} ${blocked ? `${block}dpi 이상이 되도록 ` : ''}작게 놓거나 다른 사진으로 바꿔 주세요.`,
         });
     }
     const box = (0, geometry_1.elementBounds)(element);

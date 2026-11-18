@@ -81,11 +81,20 @@ export interface Post {
   pinThemeId?: string
   photoUrls: string[]
   photoThumbnailUrls?: string[]
+  /** Private print copies (src/lib/photoPrint.ts), matched to `photoUrls` by URL. */
+  photoPrints?: PostPhotoPrint[]
   groupId?: string
   likeCount: number
   commentCount: number
   createdAt: Timestamp
   updatedAt: Timestamp
+}
+
+/** Pixel size of a photo's print copy, which sits beside the display file `url`. */
+export interface PostPhotoPrint {
+  url: string
+  width: number
+  height: number
 }
 
 export interface PostFormInput {

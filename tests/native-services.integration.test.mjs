@@ -481,6 +481,20 @@ test('shared media rules permit staged uploads and protect private posts and gro
   assert.equal((await storageSdk.getBytes(mediaRef(owner, privatePath))).byteLength, jpeg.byteLength)
   await assert.rejects(storageSdk.getBytes(mediaRef(outsider, privatePath)), mediaDenied)
 
+  // Print copies stay private even when the pin and its display photos are public.
+  const publicId = await posts.createPost({ ...input(), visibility: 'public' }, [], owner.actor)
+  const shownPath = `posts/${owner.uid}/${publicId}/photo.jpg`
+  const printPath = `posts/${owner.uid}/${publicId}/print/photo.jpg`
+  await upload(owner, shownPath)
+  await upload(owner, printPath)
+  assert.equal((await storageSdk.getBytes(mediaRef(outsider, shownPath))).byteLength, jpeg.byteLength)
+  assert.equal((await storageSdk.getBytes(mediaRef(owner, printPath))).byteLength, jpeg.byteLength)
+  await assert.rejects(storageSdk.getBytes(mediaRef(outsider, printPath)), mediaDenied)
+  await assert.rejects(storageSdk.getDownloadURL(mediaRef(outsider, printPath)), mediaDenied)
+  await assert.rejects(upload(outsider, `posts/${owner.uid}/${publicId}/print/other.jpg`), mediaDenied)
+  await assert.rejects(upload(owner, `posts/${owner.uid}/${publicId}/print/photo.png`, jpeg, 'image/png'), mediaDenied)
+  await assert.rejects(upload(owner, `posts/${owner.uid}/${publicId}/print/deeper/photo.jpg`), mediaDenied)
+
   const groups = await owner.service('group')
   const memberGroups = await member.service('group')
   const groupId = await groups.createGroup({ name: '사진 그룹', description: '', visibility: 'private' }, owner.uid)

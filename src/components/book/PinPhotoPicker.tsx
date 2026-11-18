@@ -6,6 +6,7 @@ import { RemoteImage } from '../RemoteImage'
 import { Button, Notice, p } from '../ui'
 import { getUserPosts } from '../../services/postService'
 import { measurePhoto } from '../../services/bookPhotoService'
+import { printPxOf } from '../../lib/photoPrint'
 import type { Post } from '../../types/post'
 import type { BookImageRef } from '../../types/book'
 
@@ -39,7 +40,7 @@ export function PinPhotoPicker({ uid, visible, onClose, onPick }: {
     setPicking(key)
     measurePhoto(url)
       .then(size => {
-        onPick({ postId: post.id, photoIndex: index, url, thumbUrl: post.photoThumbnailUrls?.[index], pxWidth: size.width, pxHeight: size.height })
+        onPick({ postId: post.id, photoIndex: index, url, thumbUrl: post.photoThumbnailUrls?.[index], pxWidth: size.width, pxHeight: size.height, ...printPxOf(post, index) })
         onClose()
       })
       .catch(() => setError('사진을 열지 못했어요. 다른 사진을 골라 주세요.'))
