@@ -1,19 +1,33 @@
 import type { ConfigContext, ExpoConfig } from "expo/config";
+import { withAndroidManifest, type ConfigPlugin } from "expo/config-plugins";
 
 // Web paths that also exist as app routes; keep in sync with the web's well-known files.
 const LINK_HOST = "www.pinori.kr";
 const LINK_PATHS = ["posts", "feed", "groups", "people", "chats"];
+// A portrait-locked activity makes Android imply android.hardware.screen.portrait as a
+// required feature, which hides the app on Google Play from devices without a portrait
+// screen (Chromebooks, Android XR). The app stays portrait; the feature is just optional.
+const PORTRAIT_FEATURE = "android.hardware.screen.portrait";
+const withOptionalPortraitScreen: ConfigPlugin = (config) =>
+  withAndroidManifest(config, (mod) => {
+    const manifest = mod.modResults.manifest;
+    const features = (manifest["uses-feature"] ??= []);
+    const existing = features.find((item) => item.$["android:name"] === PORTRAIT_FEATURE);
+    if (existing) existing.$["android:required"] = "false";
+    else features.push({ $: { "android:name": PORTRAIT_FEATURE, "android:required": "false" } });
+    return mod;
+  });
 export default ({ config }: ConfigContext): ExpoConfig => {
   const googleIosId = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID;
   const kakaoKey = process.env.EXPO_PUBLIC_KAKAO_NATIVE_APP_KEY;
   const projectId =
     process.env.EXPO_PUBLIC_EAS_PROJECT_ID?.trim() ||
     config.extra?.eas?.projectId;
-  return {
+  return withOptionalPortraitScreen({
     ...config,
     name: "피노리",
     slug: "spotit",
-    version: "1.0.18",
+    version: "1.0.19",
     orientation: "portrait",
     scheme: "spotit",
     userInterfaceStyle: "light",
@@ -175,5 +189,5 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         iosConfigured: Boolean(process.env.GOOGLE_MAPS_IOS_API_KEY),
       },
     },
-  };
+  });
 };
