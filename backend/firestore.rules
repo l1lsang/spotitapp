@@ -429,6 +429,11 @@ service cloud.firestore {
             || (!(pageId in getAfter(bookDoc(bookId)).data.pageIds) && bookRevisedInBatch(bookId)));
       }
     }
+    // Print render status, written only by renderBookPdf (Admin SDK).
+    match /bookRenders/{bookId} {
+      allow get: if isOwner(resource.data.uid);
+      allow list, write: if false;
+    }
     // Update notices are available before login; publishing is admin-only.
     match /appReleases/{platform} {
       allow get: if platform in ['android', 'ios'];

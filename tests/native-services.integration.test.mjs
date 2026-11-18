@@ -585,6 +585,19 @@ test('book drafts are private to their author and every page write must raise th
   await assert.rejects(firestore.deleteDoc(bookDoc(other)), denied)
   assert.deepEqual(await theirs.listMyBooks(other.uid), [])
 
+  // Print render status is written by the server only and read by the author only.
+  const renderDoc = client => firestore.doc(client.db, 'bookRenders', bookId)
+  await assert.rejects(firestore.setDoc(renderDoc(owner), { uid: owner.uid, revision: 2, status: 'done' }), denied)
+  const seeded = await fetch(`http://127.0.0.1:8281/v1/projects/demo-spotit-native/databases/(default)/documents/bookRenders/${bookId}`, {
+    method: 'PATCH', headers: { Authorization: 'Bearer owner', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields: { uid: { stringValue: owner.uid }, revision: { integerValue: '2' }, status: { stringValue: 'done' } } }),
+  })
+  assert.equal(seeded.status, 200)
+  assert.equal((await firestore.getDocFromServer(renderDoc(owner))).get('status'), 'done')
+  await assert.rejects(firestore.getDocFromServer(renderDoc(other)), denied)
+  await assert.rejects(firestore.updateDoc(renderDoc(owner), { status: 'rendering' }), denied)
+  await assert.rejects(firestore.getDocs(firestore.collection(owner.db, 'bookRenders')), denied)
+
   // Deleting removes the book and its pages; a deleted book reads as missing.
   await books.deleteBook(bookId)
   assert.deepEqual(await books.loadBook(owner.uid, bookId), { kind: 'missing' })

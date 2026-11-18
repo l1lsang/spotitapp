@@ -11,6 +11,8 @@ import { FALLBACK_FONT, glyphReport } from './glyphs'
 export type IssueSeverity = 'error' | 'warn' | 'info'
 export type IssueKind = 'page-count' | 'photo-resolution' | 'text-outside-safe' | 'photo-bleed-gap' | 'photo-full-bleed' | 'font'
   | 'glyph-fallback' | 'glyph-missing' | 'empty-page'
+  // Found only by the print renderer, which lays text out with the real fonts and reads the photos.
+  | 'text-overflow' | 'photo-unavailable'
 
 export interface PreflightIssue {
   /** Stable for the same problem, so lists keep their place while editing. */
