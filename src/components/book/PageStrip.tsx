@@ -22,11 +22,13 @@ export function PageThumb({ page, spec, width = THUMB_WIDTH }: { page: BookPage;
 }
 
 /** Every page in order. A tap opens a page; the last tile adds one after the open page. */
-export function PageStrip({ pages, spec, pageIndex, canAdd, onOpen, onAdd }: {
+export function PageStrip({ pages, spec, pageIndex, canAdd, flagged = [], onOpen, onAdd }: {
   pages: BookPage[]
   spec: BookSpec
   pageIndex: number
   canAdd: boolean
+  /** Pages with a print problem, marked so they can be found. */
+  flagged?: readonly number[]
   onOpen: (index: number) => void
   onAdd: () => void
 }) {
@@ -38,10 +40,11 @@ export function PageStrip({ pages, spec, pageIndex, canAdd, onOpen, onAdd }: {
   return <ScrollView ref={scroll} horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.strip} accessibilityLabel="페이지 목록">
     {pages.map((page, index) => {
       const open = index === pageIndex
-      return <Pressable key={page.id} accessibilityRole="button" accessibilityState={{ selected: open }} accessibilityLabel={`${index + 1}쪽${open ? ', 편집 중' : ''}`}
+      const warn = flagged.includes(index)
+      return <Pressable key={page.id} accessibilityRole="button" accessibilityState={{ selected: open }} accessibilityLabel={`${index + 1}쪽${open ? ', 편집 중' : ''}${warn ? ', 확인 필요' : ''}`}
         onPress={() => onOpen(index)} style={({ pressed }) => [styles.item, pressed && { opacity: 0.7 }]}>
         <View style={[styles.frame, open && styles.frameOpen]}><PageThumb page={page} spec={spec} /></View>
-        <Text style={[styles.number, open && styles.numberOpen]}>{index + 1}</Text>
+        <Text style={[styles.number, open && styles.numberOpen, warn && styles.numberWarn]}>{warn ? '! ' : ''}{index + 1}</Text>
       </Pressable>
     })}
     <Pressable accessibilityRole="button" accessibilityLabel="다음에 쪽 추가" accessibilityState={{ disabled: !canAdd }} disabled={!canAdd} onPress={onAdd}
@@ -59,5 +62,6 @@ const styles = StyleSheet.create({
   thumb: { overflow: 'hidden', borderRadius: 1 },
   number: { fontSize: 13, color: p.muted },
   numberOpen: { color: p.primary, fontWeight: '700' },
+  numberWarn: { color: p.coral, fontWeight: '700' },
   add: { width: THUMB_WIDTH + 8, height: THUMB_WIDTH * 1.4 + 8, borderWidth: 1.5, borderStyle: 'dashed', borderColor: p.line, borderRadius: 4, alignItems: 'center', justifyContent: 'center' },
 })

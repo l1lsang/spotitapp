@@ -40,10 +40,10 @@ function ElementContent({ element, layout, thumb, onLayout }: { element: BookEle
   }}>{element.text}</Text>
 }
 
-/** A still element, for thumbnails and previews. */
-export function StaticElementView({ element, layout }: { element: BookElement; layout: PageLayout }) {
+/** A still element, for thumbnails (small photos) and the preview (`full` photos). */
+export function StaticElementView({ element, layout, full = false }: { element: BookElement; layout: PageLayout; full?: boolean }) {
   return <View pointerEvents="none" style={[styles.element, elementBoxPx(element, layout), { transform: [{ rotate: `${element.rotationDeg}deg` }] }]}>
-    <ElementContent element={element} layout={layout} thumb />
+    <ElementContent element={element} layout={layout} thumb={!full} />
   </View>
 }
 

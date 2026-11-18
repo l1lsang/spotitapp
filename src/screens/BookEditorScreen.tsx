@@ -1,11 +1,10 @@
-import { useState, type ReactNode } from 'react'
+import { useCallback, useState, type ReactNode } from 'react'
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { router } from 'expo-router'
-import { useFonts } from 'expo-font'
+import { router, useFocusEffect } from 'expo-router'
 import { randomUUID } from 'expo-crypto'
 import {
-  BringToFront, Check, ChevronLeft, CopyPlus, Files, ImagePlus, Minus, Palette, PenLine, Plus, Redo2, RotateCw,
+  AlertTriangle, BookOpen, BringToFront, Check, ChevronLeft, CopyPlus, Files, ImagePlus, Minus, Palette, PenLine, Plus, Redo2, RotateCw,
   SendToBack, SquareDashed, Trash2, Type, Undo2, ALargeSmall,
 } from 'lucide-react-native'
 import { Text } from '../components/Typography'
@@ -15,12 +14,15 @@ import { BookPageCanvas } from '../components/book/BookPageCanvas'
 import { PinPhotoPicker } from '../components/book/PinPhotoPicker'
 import { TextEditDialog } from '../components/book/TextEditDialog'
 import { PageStrip } from '../components/book/PageStrip'
+import { useBookFonts } from '../components/book/bookFonts'
 import { BackgroundPanel, PagesPanel, TextStylePanel } from '../components/book/EditorPanels'
 import { useAuth } from '../hooks/useAuth'
 import { useBookEditor, type BlockedReason } from '../hooks/useBookEditor'
 import { canAddElement, canAddPage, currentPage, MAX_ELEMENTS_PER_PAGE } from '../lib/book/editor'
 import { NO_TRANSFORM } from '../lib/book/geometry'
 import { getBookSpec } from '../lib/book/specs'
+import { flaggedPages, preflightBook } from '../lib/book/preflight'
+import { takeBookFocus } from '../lib/book/focus'
 import type { BookSaveStatus } from '../lib/book/bookSession'
 
 const SAVE_LABEL: Record<BookSaveStatus, string> = {
@@ -39,12 +41,6 @@ const BLOCKED_TEXT: Record<BlockedReason, string> = {
   failed: '책을 불러오지 못했어요. 연결을 확인한 뒤 다시 열어 주세요.',
 }
 
-// Book faces load with the editor only, not at app start.
-const BOOK_FONT_FILES = {
-  'GowunBatang-Regular': require('../../assets/fonts/book/GowunBatang-Regular.ttf'),
-  'NanumPen-Regular': require('../../assets/fonts/book/NanumPenScript-Regular.ttf'),
-}
-
 type TextEdit = { id: string | null; text: string }
 type Panel = 'text-style' | 'background' | 'pages' | null
 
@@ -60,16 +56,25 @@ function leave() {
 }
 
 function Editor({ uid, bookId }: { uid: string; bookId: string }) {
-  const [fontsLoaded, fontError] = useFonts(BOOK_FONT_FILES)
-  const { editor, blocked: openBlocked, conflict, dispatch, canUndo, canRedo, saveStatus, retrySave, resolveConflict } = useBookEditor(uid, bookId)
+  const fontsReady = useBookFonts()
+  const { editor, blocked: openBlocked, conflict, dispatch, canUndo, canRedo, saveStatus, flushLocal, retrySave, resolveConflict } = useBookEditor(uid, bookId)
   const [showGuides, setShowGuides] = useState(true)
   const [picking, setPicking] = useState(false)
   const [textEdit, setTextEdit] = useState<TextEdit | null>(null)
   const [panel, setPanel] = useState<Panel>(null)
   const [resolving, setResolving] = useState(false)
   const blocked: BlockedReason | null = openBlocked ?? (saveStatus === 'deleted' ? 'deleted' : null)
+  const ready = editor !== null
+  // Back from the preview with a problem to fix: open that page and select the element.
+  useFocusEffect(useCallback(() => {
+    if (!ready) return
+    const focus = takeBookFocus(bookId)
+    if (!focus) return
+    dispatch({ type: 'go-page', index: focus.pageIndex })
+    if (focus.elementId) dispatch({ type: 'select', id: focus.elementId })
+  }, [ready, bookId, dispatch]))
 
-  if (!editor || blocked || (!fontsLoaded && !fontError)) return <SafeAreaView style={styles.screen} edges={['top', 'bottom']}>
+  if (!editor || blocked || !fontsReady) return <SafeAreaView style={styles.screen} edges={['top', 'bottom']}>
     <View style={styles.top}><IconButton label="뒤로 가기" onPress={leave}><ChevronLeft size={22} color={p.ink} /></IconButton></View>
     <View style={styles.center}>
       {blocked ? <View style={styles.blocked}>
@@ -99,6 +104,12 @@ function Editor({ uid, bookId }: { uid: string; bookId: string }) {
     setTextEdit(null)
   }
   const addPage = () => dispatch({ type: 'add-page', pageId: randomUUID(), now: now() })
+  const issues = preflightBook(editor.draft, spec)
+  const pageIssue = issues.find(issue => issue.pageIndex === editor.pageIndex && issue.severity !== 'info')
+  const openPreview = () => {
+    // The preview reads this device's copy, so it must hold the latest edit first.
+    void flushLocal().catch(() => undefined).finally(() => router.push({ pathname: '/books/[bookId]/preview', params: { bookId } }))
+  }
   // A text style panel belongs to the selected text; it closes with the selection.
   const openPanel: Panel = panel === 'text-style' && selected?.type !== 'text' ? null : panel
 
@@ -119,6 +130,7 @@ function Editor({ uid, bookId }: { uid: string; bookId: string }) {
       <IconButton label={showGuides ? '인쇄 안내선 숨기기' : '인쇄 안내선 보기'} selected={showGuides} onPress={() => setShowGuides(value => !value)}>
         <SquareDashed size={20} color={showGuides ? p.primary : p.muted} />
       </IconButton>
+      <IconButton label="미리보기" onPress={openPreview}><BookOpen size={20} color={p.ink} /></IconButton>
     </View>
 
     <View style={styles.workspace}>
@@ -146,7 +158,11 @@ function Editor({ uid, bookId }: { uid: string; bookId: string }) {
               onDuplicate={() => dispatch({ type: 'duplicate-page', pageId: randomUUID(), elementIds: page.elements.map(() => randomUUID()), now: now() })}
               onDelete={() => dispatch({ type: 'delete-page', now: now() })} />
           : <>
-            <PageStrip pages={pages} spec={spec} pageIndex={editor.pageIndex} canAdd={canAddPage(editor)}
+            {pageIssue && <View style={styles.issue} accessibilityRole="alert">
+              <AlertTriangle size={16} color={pageIssue.severity === 'error' ? p.danger : p.coral} />
+              <Text numberOfLines={1} style={[styles.issueText, pageIssue.severity === 'error' && { color: p.danger }]}>{pageIssue.title}</Text>
+            </View>}
+            <PageStrip pages={pages} spec={spec} pageIndex={editor.pageIndex} canAdd={canAddPage(editor)} flagged={flaggedPages(issues)}
               onOpen={index => dispatch({ type: 'go-page', index })} onAdd={addPage} />
             {full && !selected && <View style={styles.notice}><Notice>한 쪽에는 요소를 {MAX_ELEMENTS_PER_PAGE}개까지 넣을 수 있어요.</Notice></View>}
             {selected
@@ -204,6 +220,8 @@ const styles = StyleSheet.create({
   blocked: { alignSelf: 'stretch', gap: 12 },
   blockedText: { fontSize: 15, lineHeight: 23, color: p.ink },
   conflictActions: { gap: 8 },
+  issue: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingTop: 8, backgroundColor: p.paper },
+  issueText: { flex: 1, fontSize: 13, color: p.coral },
   top: { flexDirection: 'row', alignItems: 'center', gap: 0, paddingHorizontal: 4, minHeight: 56, borderBottomWidth: 1, borderColor: p.line },
   heading: { flex: 1, gap: 1, paddingLeft: 2 },
   title: { fontSize: 16, fontWeight: '600', color: p.ink },

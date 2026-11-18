@@ -9,10 +9,12 @@ export interface BookSpec {
   /** Keep text and important parts this far inside the trim line. */
   safeMm: number
   pages: { min: number; max: number; step: number }
+  /** Effective print resolution of a photo: below `warn` it may look soft, below `block` it cannot be ordered. */
+  minEffectiveDpi: { warn: number; block: number }
 }
 
 // Assumed values until the print partner's BookSpecs response confirms them
-// (docs/book-feature-design.md, 4.1). Change them here, not in screens.
+// (docs/book-feature-design.md, 4.1 and 6.1). Change them here, not in screens.
 export const BOOK_SPECS: Record<BookSpecId, BookSpec> = {
   'a5-soft': {
     id: 'a5-soft',
@@ -21,6 +23,7 @@ export const BOOK_SPECS: Record<BookSpecId, BookSpec> = {
     bleedMm: 3,
     safeMm: 8,
     pages: { min: 50, max: 200, step: 2 },
+    minEffectiveDpi: { warn: 200, block: 100 },
   },
 }
 

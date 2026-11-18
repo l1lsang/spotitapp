@@ -45,6 +45,16 @@ export function normalizeRotation(deg: number): number {
   return turned > 180 ? turned - 360 : turned
 }
 
+/** The axis-aligned box around an element after rotation, in trim millimetres. */
+export function elementBounds(element: Pick<BookElement, 'xMm' | 'yMm' | 'wMm' | 'hMm' | 'rotationDeg'>) {
+  const angle = (element.rotationDeg * Math.PI) / 180
+  const cos = Math.abs(Math.cos(angle))
+  const sin = Math.abs(Math.sin(angle))
+  const halfW = (element.wMm * cos + element.hMm * sin) / 2
+  const halfH = (element.wMm * sin + element.hMm * cos) / 2
+  return { left: element.xMm - halfW, top: element.yMm - halfH, right: element.xMm + halfW, bottom: element.yMm + halfH }
+}
+
 /** Pulls a rotation onto a right angle when it is within `toleranceDeg` of one. */
 export function snapRotation(deg: number, toleranceDeg = 4): number {
   const normal = normalizeRotation(deg)
