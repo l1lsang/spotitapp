@@ -1,14 +1,16 @@
 import type { BookDraft, BookElement, BookImageElement, BookPage } from '../../types/book'
 import { elementBounds } from './geometry'
 import type { BookSpec } from './specs'
-import { BOOK_FONT_IDS } from './styles'
+import { BOOK_FONT_IDS, getBookFont } from './styles'
+import { FALLBACK_FONT, glyphReport } from './glyphs'
 
 // Print checks for a book draft (docs/book-feature-design.md, 6.1). Pure, so the app
 // shows them while editing and the server can run the same rules before rendering.
 // error: cannot be ordered. warn: may print badly; ordering asks first. info: worth a look.
 
 export type IssueSeverity = 'error' | 'warn' | 'info'
-export type IssueKind = 'page-count' | 'photo-resolution' | 'text-outside-safe' | 'photo-bleed-gap' | 'photo-full-bleed' | 'font' | 'empty-page'
+export type IssueKind = 'page-count' | 'photo-resolution' | 'text-outside-safe' | 'photo-bleed-gap' | 'photo-full-bleed' | 'font'
+  | 'glyph-fallback' | 'glyph-missing' | 'empty-page'
 
 export interface PreflightIssue {
   /** Stable for the same problem, so lists keep their place while editing. */
@@ -77,6 +79,23 @@ function textIssues(element: BookElement, pageIndex: number, spec: BookSpec): Pr
       id: `font:${element.id}`, kind: 'font', severity: 'error', pageIndex, elementId: element.id,
       title: '인쇄할 수 없는 글꼴이에요', detail: '글 스타일에서 손글씨·명조·고딕 중 하나로 바꿔 주세요.',
     })
+  } else {
+    const glyphs = glyphReport(element.text, element.font)
+    const list = (chars: string[]) => chars.slice(0, 8).map(char => `'${char}'`).join(' ') + (chars.length > 8 ? ` 외 ${chars.length - 8}자` : '')
+    if (glyphs.missing.length) {
+      issues.push({
+        id: `glyph-missing:${element.id}`, kind: 'glyph-missing', severity: 'warn', pageIndex, elementId: element.id,
+        title: '인쇄되지 않는 글자가 있어요',
+        detail: `책 글꼴에 없어 빈 네모로 인쇄돼요: ${list(glyphs.missing)}. 지우거나 다른 글자로 바꿔 주세요.`,
+      })
+    }
+    if (glyphs.fallback.length) {
+      issues.push({
+        id: `glyph-fallback:${element.id}`, kind: 'glyph-fallback', severity: 'info', pageIndex, elementId: element.id,
+        title: `${getBookFont(element.font).label} 글꼴에 없는 글자가 있어요`,
+        detail: `${getBookFont(FALLBACK_FONT).label} 글꼴로 대신 인쇄돼요: ${list(glyphs.fallback)}. 화면에 보이는 모양 그대로예요.`,
+      })
+    }
   }
   const box = elementBounds(element)
   const over = Math.max(spec.safeMm - box.left, spec.safeMm - box.top, box.right - (spec.trimMm.w - spec.safeMm), box.bottom - (spec.trimMm.h - spec.safeMm))

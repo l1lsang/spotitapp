@@ -3,9 +3,11 @@ import Animated, { useAnimatedStyle, type SharedValue } from 'react-native-reani
 import { Text } from '../Typography'
 import { RemoteImage } from '../RemoteImage'
 import { p } from '../ui'
-import type { BookElement } from '../../types/book'
+import type { BookElement, BookFontId } from '../../types/book'
 import { elementBoxPx, MM_PER_PT, type PageLayout } from '../../lib/book/geometry'
 import { getBookFont } from '../../lib/book/styles'
+import { fontRuns } from '../../lib/book/glyphs'
+import { fontFamilies } from '../../constants/design'
 
 /** A gesture in progress, drawn on top of the stored element until it is committed. */
 export interface LiveTransform {
@@ -37,7 +39,17 @@ function ElementContent({ element, layout, thumb, onLayout }: { element: BookEle
     fontSize,
     lineHeight: fontSize * element.lineHeight,
     ...(family ? { fontFamily: family } : {}),
-  }}>{element.text}</Text>
+  }}>{textRuns(element.text, element.font)}</Text>
+}
+
+/**
+ * Characters the book font lacks are drawn in the app's own font, as the print
+ * renderer does, instead of whatever the system would pick.
+ */
+function textRuns(text: string, font: BookFontId) {
+  const runs = fontRuns(text, font)
+  if (runs.length === 1 && runs[0].font === font) return text
+  return runs.map((run, index) => run.font === font ? run.text : <Text key={index} style={{ fontFamily: fontFamilies.regular }}>{run.text}</Text>)
 }
 
 /** A still element, for thumbnails (small photos) and the preview (`full` photos). */

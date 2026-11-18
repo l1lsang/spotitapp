@@ -89,12 +89,14 @@
     "test:apple": "node --experimental-vm-modules --test tests/appleLogin.test.mjs",
     "test:kakao:integration": "node scripts/test-kakao-auth.mjs",
     "test:integration": "node scripts/test-native-emulators.mjs",
+    "book:glyphs": "node scripts/build-book-glyphs.mjs",
+    "book:shared": "node scripts/build-book-shared.mjs",
     "licenses:generate": "node scripts/generate-open-source-licenses.mjs",
     "build": "npm run typecheck && npm run licenses:check && expo export --platform all",
     "licenses:check": "node scripts/generate-open-source-licenses.mjs --check",
     "dev-client": "expo start --dev-client",
     "release:publish": "node --experimental-strip-types scripts/publish-app-release.mjs",
-    "test": "node --import ./tests/register-types.mjs --test tests/signupRequirements.test.mjs tests/maps.test.mjs tests/chatReadReceipts.test.mjs tests/chatReactions.test.mjs tests/chatPinShare.test.mjs tests/appRelease.test.mjs tests/publishAppRelease.test.mjs tests/photoMetadata.test.mjs tests/pinThemes.test.mjs tests/mapFeedChat.test.mjs tests/userSearch.test.mjs tests/postSearch.test.mjs tests/contentFilter.test.mjs tests/chatMentions.test.mjs tests/chatLinks.test.mjs tests/placeCopy.test.mjs tests/bookGeometry.test.mjs tests/bookEditor.test.mjs tests/bookPages.test.mjs tests/bookLibrary.test.mjs tests/bookPreflight.test.mjs",
+    "test": "node --import ./tests/register-types.mjs --test tests/signupRequirements.test.mjs tests/maps.test.mjs tests/chatReadReceipts.test.mjs tests/chatReactions.test.mjs tests/chatPinShare.test.mjs tests/appRelease.test.mjs tests/publishAppRelease.test.mjs tests/photoMetadata.test.mjs tests/pinThemes.test.mjs tests/mapFeedChat.test.mjs tests/userSearch.test.mjs tests/postSearch.test.mjs tests/contentFilter.test.mjs tests/chatMentions.test.mjs tests/chatLinks.test.mjs tests/placeCopy.test.mjs tests/bookGeometry.test.mjs tests/bookEditor.test.mjs tests/bookPages.test.mjs tests/bookLibrary.test.mjs tests/bookPreflight.test.mjs tests/bookRenderShared.test.mjs",
     "go": "expo start --go"
   },
   "private": true
