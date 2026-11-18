@@ -237,3 +237,100 @@ test('offline, the session opens this device copy and sends its edits later', as
   assert.equal(state.server.draft.title, '기차에서 고친 제목')
   assert.equal(state.server.revision, 2)
 })
+
+// A clock the test moves by hand, and a server whose writes wait like Firestore offline.
+function manualClock() {
+  let now = 0
+  let seq = 0
+  const pending = new Map()
+  return {
+    timers: {
+      set: (run, ms) => { const id = ++seq; pending.set(id, { at: now + ms, run }); return id },
+      clear: id => { pending.delete(id) },
+    },
+    async advance(ms) {
+      const until = now + ms
+      for (;;) {
+        const due = [...pending].filter(([, item]) => item.at <= until).sort((a, b) => a[1].at - b[1].at)[0]
+        if (!due) break
+        pending.delete(due[0])
+        now = due[1].at
+        due[1].run()
+        await new Promise(resolve => setImmediate(resolve))
+      }
+      now = until
+      await new Promise(resolve => setImmediate(resolve))
+    },
+  }
+}
+
+const settle = () => new Promise(resolve => setImmediate(resolve))
+
+test('a write the network holds back reads as offline, then saved once it lands', async () => {
+  const base = draftWith(page('p1'))
+  const clock = manualClock()
+  const { state, deps } = fakes({ server: { draft: base, revision: 1 } })
+  const held = []
+  const write = deps.server.write
+  deps.server.write = (draft, plan) => new Promise((resolve, reject) => held.push(() => write(draft, plan).then(resolve, reject)))
+  Object.assign(deps, { timers: clock.timers, localDelayMs: 0, serverDelayMs: 0, slowWriteMs: 3000 })
+  const session = createBookSession(deps)
+  await session.open()
+  session.edit({ ...base, title: '첫 수정' })
+  await clock.advance(0)
+  assert.equal(state.statuses.at(-1), 'saving')
+  await clock.advance(3000)
+  assert.equal(state.statuses.at(-1), 'offline')
+  assert.equal(state.local.title, '첫 수정')
+  // More edits while offline stay "offline" and wait behind the held write.
+  session.edit({ ...base, title: '둘째 수정' })
+  session.edit({ ...base, title: '셋째 수정' })
+  await clock.advance(10)
+  assert.equal(state.statuses.at(-1), 'offline')
+  assert.equal(held.length, 1)
+  // Connection back: the held write lands, then one follow-up carries the newest edit.
+  held.shift()()
+  await settle(); await settle()
+  assert.equal(held.length, 1)
+  held.shift()()
+  await settle(); await settle()
+  await clock.advance(0)
+  assert.equal(state.server.draft.title, '셋째 수정')
+  assert.equal(state.server.revision, 3)
+  assert.equal(state.statuses.at(-1), 'saved')
+})
+
+test('with a copy on this device, a silent server does not hold the book closed', async () => {
+  const base = draftWith(page('p1'))
+  const clock = manualClock()
+  const { deps } = fakes({ server: { draft: base, revision: 1 }, local: { ...base, title: '기기 사본' }, sync: snapshotOf(base, 1) })
+  deps.server.load = () => new Promise(() => {})
+  Object.assign(deps, { timers: clock.timers, openTimeoutMs: 6000 })
+  const opening = createBookSession(deps).open()
+  await settle() // reads this device's copy, then starts waiting for the server
+  await clock.advance(5999)
+  let opened = null
+  void opening.then(result => { opened = result })
+  await settle()
+  assert.equal(opened, null)
+  await clock.advance(1)
+  await settle()
+  assert.equal(opened.kind, 'ready')
+  assert.equal(opened.draft.title, '기기 사본')
+})
+
+test('without a copy on this device, opening waits for the server', async () => {
+  const base = draftWith(page('p1'))
+  const clock = manualClock()
+  const { deps } = fakes({ server: { draft: base, revision: 1 } })
+  let answer
+  deps.server.load = () => new Promise(resolve => { answer = resolve })
+  Object.assign(deps, { timers: clock.timers, openTimeoutMs: 6000 })
+  let opened = null
+  void createBookSession(deps).open().then(result => { opened = result })
+  await clock.advance(60000)
+  assert.equal(opened, null)
+  answer({ kind: 'ok', draft: base, revision: 1 })
+  await settle(); await settle()
+  assert.equal(opened.kind, 'ready')
+})

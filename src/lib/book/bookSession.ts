@@ -28,15 +28,21 @@ export interface BookSessionDeps {
   onStatus(status: BookSaveStatus): void
   localDelayMs?: number
   serverDelayMs?: number
+  /** A write unanswered this long is treated as waiting for the network. */
+  slowWriteMs?: number
+  /** With a copy on this device, opening waits this long for the server before using it. */
+  openTimeoutMs?: number
   timers?: SaveQueueOptions<BookDraft>['timers']
 }
 
 /**
- * saved: on the server. saving: on its way. local: kept on this device only (offline or
- * a failed write; retry sends it). error: not even this device could keep it.
- * conflict: another device changed the book; the user must choose. deleted: the book is gone.
+ * saved: on the server. saving: on its way. offline: kept on this device while a write
+ * waits for the network; it goes out by itself once connected. local: kept on this
+ * device only after a failed write or an offline start; retry sends it. error: not even
+ * this device could keep it. conflict: another device changed the book; the user must
+ * choose. deleted: the book is gone.
  */
-export type BookSaveStatus = 'saved' | 'saving' | 'local' | 'error' | 'conflict' | 'deleted'
+export type BookSaveStatus = 'saved' | 'saving' | 'offline' | 'local' | 'error' | 'conflict' | 'deleted'
 
 export type OpenResult =
   | { kind: 'ready'; draft: BookDraft }
@@ -44,6 +50,12 @@ export type OpenResult =
   | { kind: 'blocked'; reason: 'deleted' | 'newer' | 'failed' }
 
 class RefusedError extends Error {}
+class TimeoutError extends Error {}
+
+const defaultTimers = {
+  set: (run: () => void, ms: number): unknown => setTimeout(run, ms),
+  clear: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+}
 
 export function createBookSession(deps: BookSessionDeps) {
   let synced: SyncSnapshot | null = null
@@ -54,13 +66,19 @@ export function createBookSession(deps: BookSessionDeps) {
   let openedSync: SyncState | null = null
   let localStatus: SaveStatus = 'saved'
   let serverStatus: SaveStatus = 'saved'
+  /**
+   * Firestore never rejects a write for being offline: it keeps it queued and answers
+   * once connected. A write that stays unanswered is therefore read as "offline".
+   */
+  let waitingForNetwork = false
+  const timers = deps.timers ?? defaultTimers
 
   const report = () => {
     if (deleted) return deps.onStatus('deleted')
     if (conflict) return deps.onStatus('conflict')
     if (!synced) return deps.onStatus(localStatus === 'error' ? 'error' : 'local')
     if (serverStatus === 'saved') return deps.onStatus('saved')
-    if (serverStatus === 'pending' || serverStatus === 'saving') return deps.onStatus('saving')
+    if (serverStatus === 'pending' || serverStatus === 'saving') return deps.onStatus(waitingForNetwork ? 'offline' : 'saving')
     deps.onStatus(localStatus === 'error' ? 'error' : 'local')
   }
 
@@ -73,9 +91,12 @@ export function createBookSession(deps: BookSessionDeps) {
     if (!plan) return
     const target = snapshotOf(draft, base.revision + 1)
     await keepSync({ ...base, inflight: target })
+    const slow = timers.set(() => { waitingForNetwork = true; report() }, deps.slowWriteMs ?? 3000)
     try {
       await deps.server.write(draft, plan)
+      waitingForNetwork = false
     } catch (error) {
+      waitingForNetwork = false
       if (!deps.isRefusal(error)) throw error
       // Refused: either another device saved first, or the book is gone.
       const now = await deps.server.load()
@@ -89,6 +110,8 @@ export function createBookSession(deps: BookSessionDeps) {
       }
       conflict = { draft: now.draft, synced: serverSynced }
       throw new RefusedError('conflict')
+    } finally {
+      timers.clear(slow)
     }
     synced = target
     await keepSync(target)
@@ -113,9 +136,23 @@ export function createBookSession(deps: BookSessionDeps) {
     void keepSync(snapshot)
   }
 
+  /** The server's answer, or a TimeoutError after `ms` (no limit when undefined). */
+  function loadServer(ms: number | undefined): Promise<ServerBook> {
+    const load = deps.server.load()
+    if (ms === undefined) return load
+    return new Promise((resolve, reject) => {
+      const timer = timers.set(() => reject(new TimeoutError('server')), ms)
+      load.then(
+        value => { timers.clear(timer); resolve(value) },
+        error => { timers.clear(timer); reject(error) },
+      )
+    })
+  }
+
   async function connect(local: BookDraft | null, localSync: SyncState | null): Promise<OpenResult | null> {
     let server: ServerBook
-    try { server = await deps.server.load() } catch { return null }
+    // Without a copy here there is nothing else to show, so only then wait for as long as it takes.
+    try { server = await loadServer(local ? deps.openTimeoutMs ?? 6000 : undefined) } catch { return null }
     if (server.kind === 'missing') {
       deleted = true
       await deps.local.clear().catch(() => undefined)
