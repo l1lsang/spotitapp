@@ -135,6 +135,10 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       [
         "expo-build-properties",
         {
+          // App Store Connect requires the iOS 27 SDK (Xcode 27, see eas.json) from
+          // April 2027, and apps built with it start on iOS 27 only with the UIKit scene
+          // life cycle. SDK 58 has it built in; remove this when upgrading.
+          ios: { enableSceneSupport: true },
           android: {
             extraMavenRepos: [
               "https://devrepo.kakao.com/nexus/content/groups/public/",
